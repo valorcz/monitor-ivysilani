@@ -15,6 +15,7 @@ UV_PIP = uv pip
 install:
 	$(UV_PIP) install -e .
 	$(UV_PIP) install pytest
+	cp yt-dlp-patch/ceskatelevize.py .venv/lib/python3.12/site-packages/yt_dlp/extractor/
 
 # --------------------------
 #  Test runners
@@ -60,3 +61,4 @@ help:
 	@echo "  make lint         - run ruff linter"
 	@echo "  make format       - auto-fix with ruff + black"
 	@echo "  make clean        - remove caches and build artifacts"
+

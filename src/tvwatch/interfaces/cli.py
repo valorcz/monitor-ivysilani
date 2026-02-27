@@ -6,8 +6,8 @@ import asyncio
 from tvwatch.core.config import CONFIG
 from tvwatch.core.logging import setup_logger
 from tvwatch.core.db import DuckRepo
-from tvwatch.core.scraper import sync_all
 from tvwatch.core.downloader import download_many
+from tvwatch.core.scraper import sync_all_concurrent
 
 
 def output_json(data) -> None:
@@ -49,10 +49,17 @@ def cmd_list(args):
                 print(f"- {url} [{'active' if active else 'disabled'}]")
 
 
+async def run_sync(repo, logger, download: bool):
+    results = await sync_all_concurrent(repo, logger)
+    return results
+
+
 def cmd_sync(args):
     logger = setup_logger("EpisodeScraper", args.debug)
     with DuckRepo(args.db) as repo:
-        results = sync_all(repo, logger)
+        # results = sync_all(repo, logger)
+        results = asyncio.run(run_sync(repo, logger, args.download))
+
         output_json([r.to_payload() for r in results])
         if args.download and results:
             urls = [

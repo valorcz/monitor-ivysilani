@@ -1,3 +1,4 @@
+import asyncio
 from typing import List, Dict, Any, Optional
 import json
 from lxml import html
@@ -95,3 +96,39 @@ def sync_all(repo: DuckRepo, logger) -> List[SyncResult]:
             )
             results.append(r)
     return results
+
+
+async def sync_all_concurrent(
+    repo: DuckRepo, logger, max_concurrency: int = 4
+) -> List[SyncResult]:
+    """
+    Run sync_one_show concurrently with a maximum concurrency limit.
+    Uses asyncio.to_thread so sync_one_show can remain synchronous.
+    """
+
+    semaphore = asyncio.Semaphore(max_concurrency)
+    results: List[SyncResult] = []
+
+    async def run_for_url(url: str):
+        async with semaphore:
+            logger.info("Starting sync: %s", url)
+            # run sync_one_show in a worker thread
+            result = await asyncio.to_thread(sync_one_show, url, repo, logger)
+            if result and result.new_episodes:
+                logger.info(
+                    "Finished sync: %s -> new episodes: %d",
+                    url,
+                    len(result.new_episodes),
+                )
+            return result
+
+    active_urls = repo.get_active_urls()
+    if not active_urls:
+        logger.info("No active shows to sync.")
+        return results
+
+    tasks = [asyncio.create_task(run_for_url(url)) for url in active_urls]
+    finished = await asyncio.gather(*tasks, return_exceptions=False)
+
+    # Filter out None results
+    return [r for r in finished if r]

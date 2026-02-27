@@ -11,6 +11,8 @@ from tvwatch.core.logging import setup_logger
 from tvwatch.core.db import DuckRepo
 from tvwatch.core.scraper import sync_all
 from tvwatch.core.downloader import download_many
+from tvwatch.core.scraper import sync_all_concurrent
+
 
 logger = setup_logger("DiscordBot")
 
@@ -101,7 +103,8 @@ class TVScraperBot(commands.Bot):
                         f"Guild {guild_id}: cannot access channel {channel_id_str}"
                     )
                     continue
-                new = await asyncio.to_thread(sync_all, repo, logger)
+                # new = await asyncio.to_thread(sync_all, repo, logger)
+                new = await sync_all_concurrent(repo, logger, max_concurrency=4)
                 if new:
                     payload = [r.to_payload() for r in new]
                     await dispatch_notifications(payload, target=channel)
