@@ -3,6 +3,7 @@ services:
     build: .
     image: forgejo.rodinny.cloud/valorcz/tvwatch:latest
     container_name: tv-scraper
+    # Override the default entrypoint
     entrypoint: tvwatch-bot
     env_file:
       - .env.docker
@@ -10,4 +11,5 @@ services:
       # Maps the local ./data folder to the container's /app/data folder
       - ./data:/app/data
       - ./download:/download
-    # We don't use 'restart: always' because this is a one-shot script, not a persistent web server.
+    # Bot service
+    restart: unless-stopped
