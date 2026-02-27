@@ -1,18 +1,17 @@
-import os
-import glob
-import sys
 import asyncio
+import glob
+import os
+import sys
+
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
 from tvwatch.core.config import CONFIG
-from tvwatch.core.logging import setup_logger
 from tvwatch.core.db import DuckRepo
-from tvwatch.core.scraper import sync_all
 from tvwatch.core.downloader import download_many
-from tvwatch.core.scraper import sync_all_concurrent
-
+from tvwatch.core.logging import setup_logger
+from tvwatch.core.scraper import sync_all, sync_all_concurrent
 
 logger = setup_logger("DiscordBot")
 
@@ -22,7 +21,9 @@ def ensure_dirs():
     os.makedirs(CONFIG.DOWNLOAD_DIR, exist_ok=True)
 
 
-def guild_db_path(guild_id: int) -> str:
+def guild_db_path(guild_id: int | None) -> str:
+    if guild_id is None:
+        return os.path.join(CONFIG.DATA_DIR, "guild_default.duckdb")
     return os.path.join(CONFIG.DATA_DIR, f"guild_{guild_id}.duckdb")
 
 

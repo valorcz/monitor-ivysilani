@@ -1,12 +1,12 @@
-import sys
 import argparse
-import json
 import asyncio
+import json
+import sys
 
 from tvwatch.core.config import CONFIG
-from tvwatch.core.logging import setup_logger
 from tvwatch.core.db import DuckRepo
 from tvwatch.core.downloader import download_many
+from tvwatch.core.logging import setup_logger
 from tvwatch.core.scraper import sync_all_concurrent
 
 
@@ -62,15 +62,10 @@ def cmd_sync(args):
 
         output_json([r.to_payload() for r in results])
         if args.download and results:
-            urls = [
-                e.metadata.get("url")
-                for r in results
-                for e in r.new_episodes
-                if e.metadata.get("url")
-            ]
+            urls = [e.url for r in results for e in r.new_episodes if e.url]
             if urls:
                 logger.info(f"Downloading {len(urls)} newly discovered episode(s)...")
-                asyncio.run(download_many(urls, logger))
+                asyncio.run(download_many(urls.__reduce__(), logger))
 
 
 def cmd_download(args):

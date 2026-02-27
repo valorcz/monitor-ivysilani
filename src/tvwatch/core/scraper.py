@@ -130,5 +130,12 @@ async def sync_all_concurrent(
     tasks = [asyncio.create_task(run_for_url(url)) for url in active_urls]
     finished = await asyncio.gather(*tasks, return_exceptions=False)
 
+    results = []
+    for item in finished:
+        if isinstance(item, Exception):
+            logger.error("Error during sync: %s", item)
+            continue
+        results.append(item)
+    return results
     # Filter out None results
-    return [r for r in finished if r]
+    # return [r for r in finished if r]

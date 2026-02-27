@@ -35,6 +35,12 @@ def test_download_one_monkeypatch(monkeypatch):
         def info(self, *a, **k):
             pass
 
+        def debug(self, *a, **k):
+            pass
+
+        def error(self, *a, **k):
+            pass
+
     async def run():
         url, ok, err = await dl.download_one(
             "https://ceskatelevize.cz/porady/x/1", logger=_L()

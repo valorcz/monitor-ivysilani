@@ -1,6 +1,7 @@
 import asyncio
-from typing import Iterable, List, Tuple
 from datetime import datetime
+from typing import Iterable, List, Tuple
+
 from .config import CONFIG
 from .net import assert_allowed_url
 
@@ -8,7 +9,7 @@ from .net import assert_allowed_url
 COMMON_ARGS = [
     "--no-playlist",
     "--force-ipv4",
-    "--restrict-filenames",
+    #    "--restrict-filenames",
     "--verbose",
     "-o",
     "%(title)s_[%(id)s].%(ext)s",
@@ -18,7 +19,8 @@ COMMON_ARGS = [
     "--embed-subs",
     "--embed-metadata",
     "--all-subs",
-    "--newline",
+    "--no-progress",
+    #    "--newline", # if we need to see the progress, let's use the --newline
 ]
 
 
@@ -115,7 +117,9 @@ async def download_one(url: str, logger) -> Tuple[str, bool, str]:
         return url, False, stderr
 
 
-async def download_many(urls: Iterable[str], logger) -> List[Tuple[str, bool, str]]:
+async def download_many(
+    urls: Iterable[str] | None, logger
+) -> List[Tuple[str, bool, str]]:
     """
     Downloads provided URLs sequentially (simple and predictable). For limited
     concurrency, we can expand this later with a semaphore and gather().
@@ -123,6 +127,9 @@ async def download_many(urls: Iterable[str], logger) -> List[Tuple[str, bool, st
     results: List[Tuple[str, bool, str]] = []
     total = 0
     ok = 0
+
+    if urls is None:
+        return results
 
     for u in urls:
         total += 1
