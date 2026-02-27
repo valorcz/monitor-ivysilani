@@ -1,0 +1,13 @@
+services:
+  scraper:
+    build: .
+    image: forgejo.rodinny.cloud/valorcz/tvwatch:latest
+    container_name: tv-scraper
+    entrypoint: tvwatch-bot
+    env_file:
+      - .env.docker
+    volumes:
+      # Maps the local ./data folder to the container's /app/data folder
+      - ./data:/app/data
+      - ./download:/download
+    # We don't use 'restart: always' because this is a one-shot script, not a persistent web server.

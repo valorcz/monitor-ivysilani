@@ -1036,12 +1036,12 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "requests" },
     { name = "tenacity" },
-    { name = "yt-dlp" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "ruff" },
+    { name = "yt-dlp" },
 ]
 
 [package.metadata]
@@ -1056,11 +1056,13 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1" },
     { name = "requests", specifier = ">=2" },
     { name = "tenacity", specifier = ">=8" },
-    { name = "yt-dlp", specifier = ">=2026.2.21" },
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "ruff", specifier = ">=0.15.4" }]
+dev = [
+    { name = "ruff", specifier = ">=0.15.4" },
+    { name = "yt-dlp", specifier = ">=2026.2.21" },
+]
 
 [[package]]
 name = "typing-extensions"
