@@ -1,7 +1,7 @@
 services:
   scraper:
     build: .
-    image: forgejo.rodinny.cloud/valorcz/tvwatch:latest
+    image: tvwatch:latest
     container_name: tv-scraper
     # Override the default entrypoint
     entrypoint: tvwatch-bot
