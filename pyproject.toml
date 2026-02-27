@@ -1,0 +1,33 @@
+[project]
+name = "tvwatch"
+version = "0.1.0"
+description = "Česká televize watchlist scraper (CLI + Discord)"
+requires-python = ">=3.11"
+dependencies = [
+  "pydantic>=2",
+  "pydantic-settings>=2",
+  "duckdb>=1",
+  "lxml>=5",
+  "requests>=2",
+  "tenacity>=8",
+  "python-dotenv>=1",
+  "discord.py>=2",
+  "cssselect>=1.4.0",
+  "pytest>=9.0.2",
+]
+
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["tvwatch*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+[project.scripts]
+tvwatch = "tvwatch.interfaces.cli:main"
+tvwatch-bot = "tvwatch.interfaces.discord_bot:main"
+
