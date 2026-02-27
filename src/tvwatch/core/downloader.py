@@ -4,20 +4,26 @@ from .config import CONFIG
 from .net import assert_allowed_url
 
 YT_DLP_ARGS_BASE = [
-    "uv", "run", "/yt-dlp/yt-dlp.sh",
-    "-P", CONFIG.DOWNLOAD_DIR,
+    "uv",
+    "run",
+    "/yt-dlp/yt-dlp.sh",
+    "-P",
+    CONFIG.DOWNLOAD_DIR,
     "--no-playlist",
     "--force-ipv4",
     "--restrict-filenames",
     "--verbose",
-    "-o", "%(title)s_[%(id)s].%(ext)s",
+    "-o",
+    "%(title)s_[%(id)s].%(ext)s",
     "--audio-multistreams",
-    "-f", "bv*+mergeall[vcodec=none]",
+    "-f",
+    "bv*+mergeall[vcodec=none]",
     "--embed-subs",
     "--embed-metadata",
     "--all-subs",
     "--newline",
 ]
+
 
 async def download_one(url: str, logger) -> Tuple[str, bool, str]:
     """
@@ -25,7 +31,8 @@ async def download_one(url: str, logger) -> Tuple[str, bool, str]:
     """
     assert_allowed_url(url)
     proc = await asyncio.create_subprocess_exec(
-        *YT_DLP_ARGS_BASE, url,
+        *YT_DLP_ARGS_BASE,
+        url,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -43,6 +50,7 @@ async def download_one(url: str, logger) -> Tuple[str, bool, str]:
     else:
         stderr = (await proc.stderr.read() if proc.stderr else b"").decode().strip()
         return url, False, stderr
+
 
 async def download_many(urls: Iterable[str], logger) -> List[Tuple[str, bool, str]]:
     results = []

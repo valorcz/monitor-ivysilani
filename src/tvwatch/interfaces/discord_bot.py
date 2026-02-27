@@ -14,18 +14,23 @@ from tvwatch.core.downloader import download_many
 
 logger = setup_logger("DiscordBot")
 
+
 def ensure_dirs():
     os.makedirs(CONFIG.DATA_DIR, exist_ok=True)
     os.makedirs(CONFIG.DOWNLOAD_DIR, exist_ok=True)
 
+
 def guild_db_path(guild_id: int) -> str:
     return os.path.join(CONFIG.DATA_DIR, f"guild_{guild_id}.duckdb")
+
 
 class DownloadAllView(discord.ui.View):
     def __init__(self, ep_urls: list):
         super().__init__(timeout=None)
         self.ep_urls = ep_urls
-        label = "⬇️ Stáhnout" if len(ep_urls) == 1 else f"⬇️ Stáhnout vše ({len(ep_urls)})"
+        label = (
+            "⬇️ Stáhnout" if len(ep_urls) == 1 else f"⬇️ Stáhnout vše ({len(ep_urls)})"
+        )
         btn = discord.ui.Button(label=label, style=discord.ButtonStyle.primary)
         btn.callback = self.download_all
         self.add_item(btn)
@@ -42,6 +47,7 @@ class DownloadAllView(discord.ui.View):
         btn.label = f"✅ Staženo ({ok}/{len(results)})"
         btn.style = discord.ButtonStyle.success
         await interaction.edit_original_response(view=self)
+
 
 async def dispatch_notifications(new_data: list, target):
     for show in new_data:
@@ -61,6 +67,7 @@ async def dispatch_notifications(new_data: list, target):
         embed.description = "\n".join(lines)
         view = DownloadAllView(ep_urls=ep_urls)
         await target.send(embed=embed, view=view)
+
 
 class TVScraperBot(commands.Bot):
     def __init__(self):
@@ -84,11 +91,15 @@ class TVScraperBot(commands.Bot):
             with DuckRepo(db_path) as repo:
                 channel_id_str = repo.get_guild_value("notification_channel")
                 if not channel_id_str:
-                    logger.warning(f"Guild {guild_id}: no notification channel configured")
+                    logger.warning(
+                        f"Guild {guild_id}: no notification channel configured"
+                    )
                     continue
                 channel = self.get_channel(int(channel_id_str))
                 if not channel:
-                    logger.error(f"Guild {guild_id}: cannot access channel {channel_id_str}")
+                    logger.error(
+                        f"Guild {guild_id}: cannot access channel {channel_id_str}"
+                    )
                     continue
                 new = await asyncio.to_thread(sync_all, repo, logger)
                 if new:
@@ -99,20 +110,22 @@ class TVScraperBot(commands.Bot):
     async def before_sync_loop(self):
         await self.wait_until_ready()
 
+
 bot = TVScraperBot()
 
+
 # ---- Autocomplete for /disable url ----
-async def disable_url_autocomplete(
-    interaction: discord.Interaction,
-    current: str
-):
+async def disable_url_autocomplete(interaction: discord.Interaction, current: str):
     db_path = guild_db_path(interaction.guild_id)
     with DuckRepo(db_path) as repo:
         shows = repo.list_shows(active=True)
     suggestions = [u for u, _ in shows if current.lower() in u.lower()]
     return [app_commands.Choice(name=u, value=u) for u in suggestions[:25]]
 
-@bot.tree.command(name="set_channel", description="Nastaví tento kanál pro automatická upozornění")
+
+@bot.tree.command(
+    name="set_channel", description="Nastaví tento kanál pro automatická upozornění"
+)
 @commands.has_permissions(administrator=True)
 async def set_channel_cmd(interaction: discord.Interaction):
     db_path = guild_db_path(interaction.guild_id)
@@ -122,6 +135,7 @@ async def set_channel_cmd(interaction: discord.Interaction):
         f"✅ Automatická upozornění budou chodit sem: <#{interaction.channel_id}>"
     )
 
+
 @bot.tree.command(name="add", description="Přidá nový seriál ke sledování")
 async def add_cmd(interaction: discord.Interaction, url: str):
     db_path = guild_db_path(interaction.guild_id)
@@ -129,14 +143,20 @@ async def add_cmd(interaction: discord.Interaction, url: str):
         repo.add_or_reactivate_show(url)
     await interaction.response.send_message(f"✅ Přidáno ke sledování:\n{url}")
 
+
 @bot.tree.command(name="disable", description="Přestane seriál sledovat")
 @app_commands.autocomplete(url=disable_url_autocomplete)
 async def disable_cmd(interaction: discord.Interaction, url: str):
     db_path = guild_db_path(interaction.guild_id)
     with DuckRepo(db_path) as repo:
         ok = repo.disable_show(url)
-    msg = f"⏸️ Sledování pozastaveno:\n{url}" if ok else f"URL v databázi nenalezeno:\n{url}"
+    msg = (
+        f"⏸️ Sledování pozastaveno:\n{url}"
+        if ok
+        else f"URL v databázi nenalezeno:\n{url}"
+    )
     await interaction.response.send_message(msg)
+
 
 @bot.tree.command(name="list", description="Zobrazí aktuálně sledované seriály")
 async def list_cmd(interaction: discord.Interaction):
@@ -147,7 +167,10 @@ async def list_cmd(interaction: discord.Interaction):
         await interaction.response.send_message("Žádné aktivně sledované seriály.")
         return
     lines = [f"• {url}" for url, _ in shows]
-    await interaction.response.send_message("**Aktivně sledované:**\n" + "\n".join(lines))
+    await interaction.response.send_message(
+        "**Aktivně sledované:**\n" + "\n".join(lines)
+    )
+
 
 @bot.tree.command(name="sync", description="Okamžitě zkontroluje nové epizody")
 async def sync_cmd(interaction: discord.Interaction):
@@ -161,6 +184,7 @@ async def sync_cmd(interaction: discord.Interaction):
     payload = [r.to_payload() for r in new]
     await dispatch_notifications(payload, target=interaction.followup)
 
+
 def main():
     ensure_dirs()
     token = CONFIG.DISCORD_BOT_TOKEN
@@ -169,6 +193,7 @@ def main():
         sys.exit(1)
     logger.info("Starting Discord Bot Daemon...")
     bot.run(token)
+
 
 if __name__ == "__main__":
     main()

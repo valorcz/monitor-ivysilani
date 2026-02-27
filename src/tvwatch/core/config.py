@@ -1,6 +1,7 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 
+
 class Config(BaseSettings):
     # --- Shared ---
     LOG_LEVEL: str = Field(default="INFO")
@@ -18,11 +19,10 @@ class Config(BaseSettings):
     )
 
     # --- Allowed URL pattern (ČT only, overridable by env) ---
-    ALLOWED_URL_RE: str = Field(
-        default=r"^https://(www\.)?ceskatelevize\.cz/porady/.*"
-    )
+    ALLOWED_URL_RE: str = Field(default=r"^https://(www\.)?ceskatelevize\.cz/porady/.*")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
 
 # Singleton-like accessor
 CONFIG = Config()

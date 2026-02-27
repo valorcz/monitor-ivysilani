@@ -5,10 +5,12 @@ from .config import CONFIG
 
 _ALLOWED = re.compile(CONFIG.ALLOWED_URL_RE)
 
+
 def _validate_allowed(url: str) -> str:
     if not _ALLOWED.match(url or ""):
         raise ValueError("URL not allowed by policy")
     return url
+
 
 class Episode(BaseModel):
     url: HttpUrl
@@ -31,6 +33,7 @@ class Episode(BaseModel):
             d["position"] = self.position
         return d
 
+
 class TVSeries(BaseModel):
     url: HttpUrl
     name: Optional[str] = None
@@ -40,6 +43,7 @@ class TVSeries(BaseModel):
     @classmethod
     def _check_allowed(cls, v: str):
         return _validate_allowed(v)
+
 
 class SyncResult(BaseModel):
     source_url: HttpUrl

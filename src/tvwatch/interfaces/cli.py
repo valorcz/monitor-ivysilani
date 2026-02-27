@@ -9,6 +9,7 @@ from tvwatch.core.db import DuckRepo
 from tvwatch.core.scraper import sync_all
 from tvwatch.core.downloader import download_many
 
+
 def output_json(data) -> None:
     try:
         encoded = json.dumps(data, indent=2, ensure_ascii=False)
@@ -17,11 +18,13 @@ def output_json(data) -> None:
     except BrokenPipeError:
         sys.exit(1)
 
+
 def cmd_add(args):
     logger = setup_logger("EpisodeScraper", args.debug)
     with DuckRepo(args.db) as repo:
         repo.add_or_reactivate_show(args.url)
         logger.info(f"Added/Reactivated show: {args.url}")
+
 
 def cmd_disable(args):
     logger = setup_logger("EpisodeScraper", args.debug)
@@ -30,6 +33,7 @@ def cmd_disable(args):
             logger.info(f"Disabled tracking: {args.url}")
         else:
             logger.warning(f"URL not found in DB: {args.url}")
+
 
 def cmd_list(args):
     setup_logger("EpisodeScraper", args.debug)
@@ -43,6 +47,7 @@ def cmd_list(args):
                 return
             for url, active in shows:
                 print(f"- {url} [{'active' if active else 'disabled'}]")
+
 
 def cmd_sync(args):
     logger = setup_logger("EpisodeScraper", args.debug)
@@ -60,9 +65,11 @@ def cmd_sync(args):
                 logger.info(f"Downloading {len(urls)} newly discovered episode(s)...")
                 asyncio.run(download_many(urls, logger))
 
+
 def cmd_download(args):
     logger = setup_logger("EpisodeScraper", args.debug)
     asyncio.run(download_many(args.urls, logger))
+
 
 def build_parser():
     p = argparse.ArgumentParser(description="Manage and sync a watchlist of TV shows.")
@@ -84,7 +91,9 @@ def build_parser():
     sp.set_defaults(func=cmd_list)
 
     sp = sub.add_parser("sync", help="Crawl active shows and output new episodes")
-    sp.add_argument("--download", action="store_true", help="Download newly discovered episodes")
+    sp.add_argument(
+        "--download", action="store_true", help="Download newly discovered episodes"
+    )
     sp.set_defaults(func=cmd_sync)
 
     sp = sub.add_parser("download", help="Download one or more episode URLs")
@@ -92,9 +101,11 @@ def build_parser():
     sp.set_defaults(func=cmd_download)
     return p
 
+
 def main():
     args = build_parser().parse_args()
     args.func(args)
+
 
 if __name__ == "__main__":
     main()

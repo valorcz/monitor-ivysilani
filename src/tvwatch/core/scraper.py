@@ -2,11 +2,11 @@ from typing import List, Dict, Any, Optional
 import json
 from lxml import html
 import requests
-from .logging import setup_logger
 from .net import robust_get
 from .models import TVSeries, Episode, SyncResult
 from .db import DuckRepo
 from .utils import redact_url_query
+
 
 def _extract_schema_data(content: bytes) -> Dict[str, Optional[Dict[str, Any]]]:
     tree = html.fromstring(content)
@@ -29,6 +29,7 @@ def _extract_schema_data(content: bytes) -> Dict[str, Optional[Dict[str, Any]]]:
                     item_list_data = item
 
     return {"series": tv_series_data, "list": item_list_data}
+
 
 def sync_one_show(url: str, repo: DuckRepo, logger) -> Optional[SyncResult]:
     try:
@@ -60,9 +61,13 @@ def sync_one_show(url: str, repo: DuckRepo, logger) -> Optional[SyncResult]:
 
         # validate with Pydantic (enforces https + allowlist)
         try:
-            ep = Episode(url=raw["url"], name=ep_name, metadata=raw, position=raw.get("position"))
+            ep = Episode(
+                url=raw["url"], name=ep_name, metadata=raw, position=raw.get("position")
+            )
         except Exception as ex:
-            logger.warning(f"Skipping invalid episode under {redact_url_query(url)}: {ex}")
+            logger.warning(
+                f"Skipping invalid episode under {redact_url_query(url)}: {ex}"
+            )
             continue
 
         if repo.insert_new_episode(show_url=url, name=ep.name, metadata=ep.metadata):
@@ -72,6 +77,7 @@ def sync_one_show(url: str, repo: DuckRepo, logger) -> Optional[SyncResult]:
         logger.debug(f"No metadata or new episodes found for {redact_url_query(url)}")
 
     return SyncResult(source_url=url, tv_series=series, new_episodes=new_eps)
+
 
 def sync_all(repo: DuckRepo, logger) -> List[SyncResult]:
     results: List[SyncResult] = []
@@ -84,6 +90,8 @@ def sync_all(repo: DuckRepo, logger) -> List[SyncResult]:
         logger.info(f"Syncing: {redact_url_query(url)}")
         r = sync_one_show(url, repo, logger)
         if r and r.new_episodes:
-            logger.info(f"Detected {len(r.new_episodes)} new episode(s) for {redact_url_query(url)}")
+            logger.info(
+                f"Detected {len(r.new_episodes)} new episode(s) for {redact_url_query(url)}"
+            )
             results.append(r)
     return results

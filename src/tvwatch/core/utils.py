@@ -1,5 +1,6 @@
 from urllib.parse import urlparse, urlunparse
 
+
 def redact_url_query(u: str) -> str:
     """
     Drop query parameters from logs (they might include tokens).
