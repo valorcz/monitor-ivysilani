@@ -47,6 +47,133 @@ def get_download_dir_size() -> str:
     return f"{total_bytes / (1024**2):.1f} MB"
 
 
+async def execute_batch_download_with_progress(
+    interaction: discord.Interaction,
+    view: discord.ui.View,
+    button: discord.ui.Button | None,
+    urls: list[str],
+) -> list[tuple[str, bool, str]]:
+    total = len(urls)
+    if button:
+        button.label = f"Stahuje se (0/{total})..."
+        button.disabled = True
+        button.style = discord.ButtonStyle.secondary
+    await interaction.response.edit_message(view=view)
+
+    start_time = datetime.now()
+    embed = discord.Embed(
+        title="Hromadné stahování epizod",
+        color=3447003,  # Blue
+    )
+    embed.add_field(
+        name="Stav",
+        value=f"Zahajování stahování (0/{total})...",
+        inline=True,
+    )
+    embed.add_field(name="Průběh", value=f"0/{total} dokončeno", inline=True)
+    embed.add_field(
+        name="Cílové úložiště",
+        value=f"`{CONFIG.DOWNLOAD_DIR}`",
+        inline=True,
+    )
+    embed.add_field(
+        name="Zahájeno",
+        value=f"{format_discord_timestamp(start_time, 'T')} ({format_discord_timestamp(start_time, 'R')})",
+        inline=False,
+    )
+    followup_msg = await interaction.followup.send(embed=embed)
+
+    completed_ok = 0
+    completed_failed = 0
+
+    async def _progress(idx: int, tot: int, url: str, status: bool | None):
+        nonlocal completed_ok, completed_failed
+        if status is None:
+            # Started downloading episode idx
+            if button:
+                button.label = f"Stahuje se ({idx}/{tot})..."
+                try:
+                    await interaction.edit_original_response(view=view)
+                except Exception:
+                    pass
+
+            embed.set_field_at(
+                0, name="Stav", value=f"Stahuje se {idx} z {tot}", inline=True
+            )
+            if len(embed.fields) > 4:
+                embed.set_field_at(
+                    4, name="Aktuální díl", value=f"<{url}>", inline=False
+                )
+            else:
+                embed.add_field(
+                    name="Aktuální díl", value=f"<{url}>", inline=False
+                )
+            try:
+                await followup_msg.edit(embed=embed)
+            except Exception:
+                pass
+        else:
+            # Finished downloading episode idx
+            if status:
+                completed_ok += 1
+            else:
+                completed_failed += 1
+            done_count = completed_ok + completed_failed
+            embed.set_field_at(
+                1,
+                name="Průběh",
+                value=f"{done_count}/{tot} ({completed_ok} úspěšně, {completed_failed} chyb)",
+                inline=True,
+            )
+            try:
+                await followup_msg.edit(embed=embed)
+            except Exception:
+                pass
+
+    results = await download_many(urls, logger, progress_callback=_progress)
+    elapsed = (datetime.now() - start_time).total_seconds()
+    ok = sum(1 for _, s, _ in results if s)
+    failed = len(results) - ok
+
+    if button:
+        button.label = f"Staženo ({ok}/{len(results)})"
+        button.style = (
+            discord.ButtonStyle.success
+            if failed == 0
+            else discord.ButtonStyle.secondary
+        )
+        try:
+            await interaction.edit_original_response(view=view)
+        except Exception:
+            pass
+
+    embed.title = "Hromadné stahování dokončeno"
+    embed.color = (
+        3066993 if failed == 0 else (15158332 if ok == 0 else 15105570)
+    )
+    embed.set_field_at(0, name="Stav", value="Dokončeno", inline=True)
+    embed.set_field_at(
+        1,
+        name="Výsledek",
+        value=f"{ok}/{len(results)} úspěšně staženo ({failed} chyb)",
+        inline=True,
+    )
+    if len(embed.fields) > 4:
+        embed.set_field_at(
+            4, name="Celkový čas", value=f"{elapsed:.1f} s", inline=False
+        )
+    else:
+        embed.add_field(
+            name="Celkový čas", value=f"{elapsed:.1f} s", inline=False
+        )
+    try:
+        await followup_msg.edit(embed=embed)
+    except Exception:
+        pass
+
+    return results
+
+
 class DownloadAllView(discord.ui.View):
     def __init__(self, ep_urls: list):
         super().__init__(timeout=None)
@@ -60,16 +187,9 @@ class DownloadAllView(discord.ui.View):
 
     async def download_all(self, interaction: discord.Interaction):
         btn: discord.ui.Button = self.children[0]  # type: ignore
-        btn.label = "Stahuje se..."
-        btn.style = discord.ButtonStyle.secondary
-        btn.disabled = True
-        await interaction.response.edit_message(view=self)
-
-        results = await download_many(self.ep_urls, logger)
-        ok = sum(1 for _, s, _ in results if s)
-        btn.label = f"Staženo ({ok}/{len(results)})"
-        btn.style = discord.ButtonStyle.success
-        await interaction.edit_original_response(view=self)
+        await execute_batch_download_with_progress(
+            interaction, view=self, button=btn, urls=self.ep_urls
+        )
 
 
 async def dispatch_notifications(
@@ -459,17 +579,10 @@ class EpisodesView(discord.ui.View):
             if isinstance(item, discord.ui.Button)
             and "Stáhnout" in (item.label or "")
         ]
-        if dl_buttons:
-            dl_buttons[0].label = "Stahuje se..."
-            dl_buttons[0].disabled = True
-        await interaction.response.edit_message(view=self)
-
-        results = await download_many(playable_urls, logger)
-        ok = sum(1 for _, s, _ in results if s)
-        if dl_buttons:
-            dl_buttons[0].label = f"Staženo ({ok}/{len(results)})"
-            dl_buttons[0].style = discord.ButtonStyle.success
-        await interaction.edit_original_response(view=self)
+        btn = dl_buttons[0] if dl_buttons else None
+        await execute_batch_download_with_progress(
+            interaction, view=self, button=btn, urls=playable_urls
+        )
 
     def get_embed(self) -> discord.Embed:
         filtered = self._get_filtered_episodes()
