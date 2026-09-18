@@ -148,3 +148,26 @@ To support reliable downloads:
 - It queries the new stream API at `https://api.ceskatelevize.cz/video/v1/playlist-vod/v1/stream-data/media/external/<idec>?canPlayDrm=true`.
 - The extractor acquires DASH streams, multi-stream audio, and WebVTT subtitles.
 - Downloads are executed sequentially by default to ensure predictable resource utilization and prevent server rate-limiting.
+
+---
+
+## 5. Discord Bot Architecture
+
+The Discord bot interface (`tvwatch.interfaces.discord_bot`) operates as an interactive daemon using `discord.py` slash commands and background loops:
+
+### Available Slash Commands
+- `/add <url>`: Register a show for automated tracking with automatic background backfill.
+- `/disable <url>`: Pause sync checks for a show.
+- `/remove <url>`: Permanently remove a show and all associated episode history from the database.
+- `/list`: Display all registered shows and their active/paused status in an aligned ASCII table.
+- `/episodes <url>`: View all stored episodes for a specific show in an ASCII table, with an interactive download button.
+- `/download <url>`: Download a specific episode on demand.
+- `/status`: Show operational statistics (active/paused shows, episode counts, storage utilization in `DOWNLOAD_DIR`).
+- `/sync`: Immediately trigger a concurrent scan across active shows and dispatch notifications.
+- `/set_channel`: Designate the active channel for automated notifications.
+
+### Message Formatting & Table Rendering
+- **ASCII Codeblock Tables**: Monospace tables generated via `format_ascii_table()` maintain uniform column widths across desktop and mobile clients without depending on external libraries.
+- **Dynamic Timestamps**: Live localized relative time tags (`<t:TIMESTAMP:R>`) display dynamic broadcast times and countdowns.
+- **Interactive Action Views**: Ephemeral buttons and views (`DownloadAllView`) enable immediate video downloading directly from notification embeds and episode listings.
+

@@ -126,8 +126,12 @@ The bot service runs `tvwatch-bot` (or `uv run tvwatch-bot`).
 
 - `/set_channel`: Sets the current channel as the destination for automated episode notifications (requires Administrator permissions).
 - `/add <url>`: Adds a show to the server watchlist. Existing episodes are backfilled silently unless configured otherwise.
-- `/list`: Displays all shows currently tracked on the server.
-- `/disable <url>`: Stops tracking a show (features interactive autocomplete).
+- `/list`: Displays all shows currently tracked on the server in a formatted ASCII table.
+- `/episodes <url>`: Displays an ASCII table of all tracked episodes for a show with an interactive download button.
+- `/download <url>`: Downloads a specific episode on demand.
+- `/status`: Displays server statistics (active/paused shows, total episodes, storage disk usage).
+- `/disable <url>`: Pauses tracking for a show (features interactive autocomplete).
+- `/remove <url>`: Permanently deletes a show and its history from the database (features interactive autocomplete).
 - `/sync`: Manually triggers an immediate episode check for the current server.
 
 ---

@@ -1,3 +1,4 @@
+from datetime import datetime
 import re
 from typing import Any
 from urllib.parse import urlparse, urlunparse
@@ -216,4 +217,66 @@ def format_standardized_title(raw_title: str, season_val: Any = None) -> str:
     elif prefix:
         return prefix
     return clean_title
+
+
+def format_ascii_table(headers: list[str], rows: list[list[str]]) -> str:
+    """
+    Renders an ASCII table with borders and padded columns suitable for Discord codeblocks.
+    """
+    if not headers and not rows:
+        return ""
+
+    num_cols = len(headers) if headers else (len(rows[0]) if rows else 0)
+    col_widths = [len(h) for h in headers] if headers else [0] * num_cols
+
+    string_rows = []
+    for r in rows:
+        str_r = [str(c) for c in r]
+        if len(str_r) < num_cols:
+            str_r.extend([""] * (num_cols - len(str_r)))
+        for i, cell in enumerate(str_r[:num_cols]):
+            col_widths[i] = max(col_widths[i], len(cell))
+        string_rows.append(str_r)
+
+    sep = "+" + "+".join("-" * (w + 2) for w in col_widths) + "+"
+    lines = [sep]
+
+    if headers:
+        header_line = (
+            "|"
+            + "|".join(f" {h.ljust(col_widths[i])} " for i, h in enumerate(headers))
+            + "|"
+        )
+        lines.append(header_line)
+        lines.append(sep)
+
+    for r in string_rows:
+        row_line = (
+            "|"
+            + "|".join(f" {r[i].ljust(col_widths[i])} " for i in range(num_cols))
+            + "|"
+        )
+        lines.append(row_line)
+
+    lines.append(sep)
+    return "\n".join(lines)
+
+
+def format_discord_timestamp(dt: datetime | int | float, style: str = "R") -> str:
+    """
+    Formats a datetime or timestamp into a Discord dynamic timestamp tag, e.g. <t:1726700000:R>.
+    Styles:
+      'R': Relative ('in 2 hours', '3 days ago')
+      'f': Short Date/Time ('September 18, 2026 10:30 PM')
+      'F': Long Date/Time ('Friday, September 18, 2026 10:30 PM')
+      'd': Short Date ('18/09/2026')
+      'D': Long Date ('18 September 2026')
+      't': Short Time ('22:30')
+    """
+    if isinstance(dt, datetime):
+        ts = int(dt.timestamp())
+    else:
+        ts = int(dt)
+    return f"<t:{ts}:{style}>"
+
 

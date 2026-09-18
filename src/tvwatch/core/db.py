@@ -338,3 +338,81 @@ class DuckRepo:
                 "SELECT value FROM guild_config WHERE key = ?", [key]
             ).fetchone()
             return row[0] if row else None
+
+    def get_show_episodes(self, show_url: str) -> List[dict]:
+        """
+        Returns all tracked episodes for a specific show.
+        """
+        canonical_url = normalize_show_url(show_url)
+        with self._lock:
+            rows = self.conn.execute(
+                """
+                SELECT url, idec, name, metadata, first_discovered_at, last_notified_at, broadcast_at
+                FROM episodes
+                WHERE show_url = ?
+                ORDER BY url
+            """,
+                [canonical_url],
+            ).fetchall()
+            return [
+                {
+                    "url": r[0],
+                    "idec": r[1],
+                    "name": r[2],
+                    "metadata": json.loads(r[3])
+                    if r[3] and isinstance(r[3], str)
+                    else (r[3] or {}),
+                    "first_discovered_at": r[4],
+                    "last_notified_at": r[5],
+                    "broadcast_at": r[6],
+                }
+                for r in rows
+            ]
+
+    def delete_show(self, show_url: str) -> bool:
+        """
+        Permanently purges a show and its associated episodes from the database.
+        """
+        canonical_url = normalize_show_url(show_url)
+        with self._lock:
+            self.conn.execute(
+                "DELETE FROM episodes WHERE show_url = ?",
+                [canonical_url],
+            )
+            row = self.conn.execute(
+                "DELETE FROM tv_shows WHERE url = ? RETURNING url",
+                [canonical_url],
+            ).fetchone()
+            if not row and canonical_url != show_url:
+                row = self.conn.execute(
+                    "DELETE FROM tv_shows WHERE url = ? RETURNING url",
+                    [show_url],
+                ).fetchone()
+            return bool(row)
+
+    def get_stats(self) -> dict:
+        """
+        Returns summary metrics for the database.
+        """
+        with self._lock:
+            total_shows = self.conn.execute(
+                "SELECT COUNT(*) FROM tv_shows"
+            ).fetchone()[0]
+            active_shows = self.conn.execute(
+                "SELECT COUNT(*) FROM tv_shows WHERE is_active = true"
+            ).fetchone()[0]
+            inactive_shows = total_shows - active_shows
+            total_episodes = self.conn.execute(
+                "SELECT COUNT(*) FROM episodes"
+            ).fetchone()[0]
+            notified_episodes = self.conn.execute(
+                "SELECT COUNT(*) FROM episodes WHERE last_notified_at IS NOT NULL"
+            ).fetchone()[0]
+            return {
+                "total_shows": total_shows,
+                "active_shows": active_shows,
+                "inactive_shows": inactive_shows,
+                "total_episodes": total_episodes,
+                "notified_episodes": notified_episodes,
+            }
+

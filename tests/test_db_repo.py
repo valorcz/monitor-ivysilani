@@ -116,3 +116,44 @@ def test_concurrent_episode_recording():
 
             assert all_errors == [], f"Encountered concurrency errors: {all_errors}"
 
+
+def test_delete_show_and_episodes():
+    with tempfile.TemporaryDirectory() as td:
+        path = os.path.join(td, "test_delete.duckdb")
+        with DuckRepo(path) as repo:
+            show_url = "https://www.ceskatelevize.cz/porady/test-show/"
+            repo.add_or_reactivate_show(show_url)
+            repo.record_episode(
+                show_url=show_url,
+                url=f"{show_url}1001/",
+                name="Ep 1",
+                idec="1001",
+            )
+            assert len(repo.get_show_episodes(show_url)) == 1
+            assert repo.delete_show(show_url) is True
+            assert len(repo.get_show_episodes(show_url)) == 0
+            assert repo.list_shows() == []
+
+
+def test_get_stats():
+    with tempfile.TemporaryDirectory() as td:
+        path = os.path.join(td, "test_stats.duckdb")
+        with DuckRepo(path) as repo:
+            show1 = "https://www.ceskatelevize.cz/porady/show-1/"
+            show2 = "https://www.ceskatelevize.cz/porady/show-2/"
+            repo.add_or_reactivate_show(show1)
+            repo.add_or_reactivate_show(show2)
+            repo.disable_show(show2)
+
+            ep1 = f"{show1}101/"
+            repo.record_episode(show_url=show1, url=ep1, name="Ep 1", idec="101")
+            repo.mark_episodes_notified([ep1])
+
+            stats = repo.get_stats()
+            assert stats["total_shows"] == 2
+            assert stats["active_shows"] == 1
+            assert stats["inactive_shows"] == 1
+            assert stats["total_episodes"] == 1
+            assert stats["notified_episodes"] == 1
+
+
