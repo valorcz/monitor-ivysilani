@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 import requests
@@ -93,13 +94,32 @@ def extract_show_idec(next_data: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+_GRAPHQL_HASH_CACHE: dict[str, tuple[str, float]] = {}
+_HASH_CACHE_TTL_SECONDS = 43200  # 12 hours
+
+
+def clear_graphql_hash_cache() -> None:
+    """Clears the persisted query hash cache."""
+    _GRAPHQL_HASH_CACHE.clear()
+
+
 def fetch_dynamic_graphql_hash(
-    session: requests.Session, show_url: str, operation_name: str = "GetEpisodes"
+    session: requests.Session,
+    show_url: str,
+    operation_name: str = "GetEpisodes",
+    force_refresh: bool = False,
 ) -> str:
     """
     Scrapes Next.js JS chunks to extract current Apollo Persisted Query SHA-256 hash.
-    Falls back to CONFIG.GRAPHQL_PERSISTED_HASH on failure.
+    Caches resolved hash for 12 hours. Falls back to CONFIG.GRAPHQL_PERSISTED_HASH on failure.
     """
+    now = time.time()
+    if not force_refresh and operation_name in _GRAPHQL_HASH_CACHE:
+        cached_hash, cached_at = _GRAPHQL_HASH_CACHE[operation_name]
+        if now - cached_at < _HASH_CACHE_TTL_SECONDS:
+            logger.debug(f"Using cached dynamic hash for {operation_name}")
+            return cached_hash
+
     dily_url = f"{show_url.rstrip('/')}/dily/"
     headers = {"User-Agent": CONFIG.USER_AGENT}
 
@@ -131,12 +151,14 @@ def fetch_dynamic_graphql_hash(
                         hash_matches.sort(key=lambda x: abs(x[1] - op_index))
                         best_hash = hash_matches[0][0]
                         logger.debug(f"Found dynamic hash {best_hash} in {s_url}")
+                        _GRAPHQL_HASH_CACHE[operation_name] = (best_hash, now)
                         return best_hash
 
     except Exception as e:
         logger.debug(f"Error resolving dynamic hash: {e}")
 
     logger.debug(f"Using fallback persisted query hash for {operation_name}")
+    _GRAPHQL_HASH_CACHE[operation_name] = (CONFIG.GRAPHQL_PERSISTED_HASH, now)
     return CONFIG.GRAPHQL_PERSISTED_HASH
 
 
@@ -180,10 +202,19 @@ def fetch_all_episodes(
             )
             response.raise_for_status()
             data = response.json()
+            if "errors" in data and any(
+                "PersistedQuery" in str(err) for err in data.get("errors", [])
+            ):
+                logger.warning(
+                    "GraphQL persisted query hash rejected by server. Invalidating cache."
+                )
+                clear_graphql_hash_cache()
+                break
         except Exception as e:
             logger.warning(
                 f"GraphQL query failed at offset {offset} for show IDEC {show_idec}: {e}"
             )
+            clear_graphql_hash_cache()
             break
 
         episodes_data = data.get("data", {}).get("episodesPreviewFind", {})

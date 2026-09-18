@@ -114,3 +114,41 @@ def test_episodes_view_pagination_and_playability():
 
     asyncio.run(_runner())
 
+
+def test_shows_list_view_pagination():
+    import asyncio
+    from tvwatch.interfaces.discord_bot import ShowsListView
+
+    async def _runner():
+        shows = [
+            (f"https://www.ceskatelevize.cz/porady/100{i:02d}-show/", i % 2 == 0)
+            for i in range(1, 26)
+        ]
+        meta = {
+            f"https://www.ceskatelevize.cz/porady/100{i:02d}-show/": {
+                "name": f"Show {i}"
+            }
+            for i in range(1, 26)
+        }
+
+        view = ShowsListView(shows, meta)
+        assert view.total_pages == 3
+        assert view.page == 0
+
+        embed_page1 = view.get_embed()
+        assert "Celkem evidováno: **25** pořad(ů)" in embed_page1.description
+        assert "Show 1" in embed_page1.description
+        assert "Show 10" in embed_page1.description
+        assert "Show 11" not in embed_page1.description
+        assert embed_page1.footer.text == "Stránka 1 z 3"
+
+        # Advance page
+        view.page = 1
+        embed_page2 = view.get_embed()
+        assert "Show 11" in embed_page2.description
+        assert "Show 20" in embed_page2.description
+        assert embed_page2.footer.text == "Stránka 2 z 3"
+
+    asyncio.run(_runner())
+
+

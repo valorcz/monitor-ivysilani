@@ -68,33 +68,38 @@ class DuckRepo:
             """
             )
 
-            # Migrations for existing databases
-            for col_def in [
-                ("idec", "VARCHAR"),
-                ("last_notified_at", "TIMESTAMPTZ"),
-                ("broadcast_at", "TIMESTAMPTZ"),
-            ]:
+            # Check if migration has already been executed
+            migrated = self.get_guild_value("schema_migrated_v1")
+            if not migrated:
+                # Migrations for existing databases
+                for col_def in [
+                    ("idec", "VARCHAR"),
+                    ("last_notified_at", "TIMESTAMPTZ"),
+                    ("broadcast_at", "TIMESTAMPTZ"),
+                ]:
+                    try:
+                        self.conn.execute(
+                            f"ALTER TABLE episodes ADD COLUMN IF NOT EXISTS {col_def[0]} {col_def[1]}"
+                        )
+                    except Exception:
+                        pass
+
+                # Backfill legacy rows with extracted idec and preserve notified state
                 try:
                     self.conn.execute(
-                        f"ALTER TABLE episodes ADD COLUMN IF NOT EXISTS {col_def[0]} {col_def[1]}"
+                        "UPDATE episodes SET idec = regexp_extract(url, '/([0-9]{10,20})/?$', 1) WHERE idec IS NULL"
                     )
                 except Exception:
                     pass
 
-            # Backfill legacy rows with extracted idec and preserve notified state
-            try:
-                self.conn.execute(
-                    "UPDATE episodes SET idec = regexp_extract(url, '/([0-9]{10,20})/?$', 1) WHERE idec IS NULL"
-                )
-            except Exception:
-                pass
+                try:
+                    self.conn.execute(
+                        "UPDATE episodes SET last_notified_at = first_discovered_at WHERE last_notified_at IS NULL AND first_discovered_at IS NOT NULL"
+                    )
+                except Exception:
+                    pass
 
-            try:
-                self.conn.execute(
-                    "UPDATE episodes SET last_notified_at = first_discovered_at WHERE last_notified_at IS NULL AND first_discovered_at IS NOT NULL"
-                )
-            except Exception:
-                pass
+                self.set_guild_value("schema_migrated_v1", "1")
 
     # --- TV shows ---
     def add_or_reactivate_show(self, url: str) -> str:

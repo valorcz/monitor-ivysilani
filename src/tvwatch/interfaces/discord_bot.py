@@ -85,12 +85,16 @@ async def execute_batch_download_with_progress(
 
     completed_ok = 0
     completed_failed = 0
+    last_edit_time = 0.0
+    last_btn_time = 0.0
 
     async def _progress(idx: int, tot: int, url: str, status: bool | None):
-        nonlocal completed_ok, completed_failed
+        nonlocal completed_ok, completed_failed, last_edit_time, last_btn_time
+        now_ts = asyncio.get_event_loop().time()
         if status is None:
             # Started downloading episode idx
-            if button:
+            if button and (now_ts - last_btn_time > 2.0):
+                last_btn_time = now_ts
                 button.label = f"Stahuje se ({idx}/{tot})..."
                 try:
                     await interaction.edit_original_response(view=view)
@@ -108,10 +112,12 @@ async def execute_batch_download_with_progress(
                 embed.add_field(
                     name="Aktuální díl", value=f"<{url}>", inline=False
                 )
-            try:
-                await followup_msg.edit(embed=embed)
-            except Exception:
-                pass
+            if now_ts - last_edit_time > 2.0:
+                last_edit_time = now_ts
+                try:
+                    await followup_msg.edit(embed=embed)
+                except Exception:
+                    pass
         else:
             # Finished downloading episode idx
             if status:
@@ -125,10 +131,12 @@ async def execute_batch_download_with_progress(
                 value=f"{done_count}/{tot} ({completed_ok} úspěšně, {completed_failed} chyb)",
                 inline=True,
             )
-            try:
-                await followup_msg.edit(embed=embed)
-            except Exception:
-                pass
+            if (now_ts - last_edit_time > 2.0) or (done_count == tot):
+                last_edit_time = now_ts
+                try:
+                    await followup_msg.edit(embed=embed)
+                except Exception:
+                    pass
 
     results = await download_many(urls, logger, progress_callback=_progress)
     elapsed = (datetime.now() - start_time).total_seconds()
@@ -232,7 +240,6 @@ async def dispatch_notifications(
 class TVScraperBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
-        intents.message_content = True
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
@@ -305,7 +312,9 @@ async def all_shows_autocomplete(
     name="set_channel",
     description="Nastaví tento kanál pro automatická upozornění",
 )
-@commands.has_permissions(administrator=True)
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
 async def set_channel_cmd(interaction: discord.Interaction):
     db_path = guild_db_path(interaction.guild_id)
     with DuckRepo(db_path) as repo:
@@ -318,7 +327,11 @@ async def set_channel_cmd(interaction: discord.Interaction):
 
 
 @bot.tree.command(name="add", description="Přidá nový pořad ke sledování")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
 async def add_cmd(interaction: discord.Interaction, url: str):
+    await interaction.response.defer()
     db_path = guild_db_path(interaction.guild_id)
     with DuckRepo(db_path) as repo:
         canonical_url = repo.add_or_reactivate_show(url)
@@ -326,12 +339,15 @@ async def add_cmd(interaction: discord.Interaction, url: str):
             await asyncio.to_thread(
                 sync_one_show, canonical_url, repo, logger, backfill=True
             )
-    await interaction.response.send_message(
+    await interaction.followup.send(
         f"Přidáno ke sledování:\n{canonical_url}"
     )
 
 
 @bot.tree.command(name="disable", description="Pozastaví sledování pořadu")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
 @app_commands.autocomplete(url=active_shows_autocomplete)
 async def disable_cmd(interaction: discord.Interaction, url: str):
     db_path = guild_db_path(interaction.guild_id)
@@ -349,6 +365,9 @@ async def disable_cmd(interaction: discord.Interaction, url: str):
     name="remove",
     description="Trvale odstraní pořad a jeho historii z databáze",
 )
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
 @app_commands.autocomplete(url=all_shows_autocomplete)
 async def remove_cmd(interaction: discord.Interaction, url: str):
     db_path = guild_db_path(interaction.guild_id)
@@ -362,7 +381,101 @@ async def remove_cmd(interaction: discord.Interaction, url: str):
     await interaction.response.send_message(msg)
 
 
+class ShowsListView(discord.ui.View):
+    def __init__(
+        self, shows: list[tuple[str, bool]], active_shows_meta: dict[str, dict]
+    ):
+        super().__init__(timeout=180)
+        self.shows = shows
+        self.active_shows_meta = active_shows_meta
+        self.page = 0
+        self.per_page = 10
+        self.total_pages = max(
+            1, (len(shows) + self.per_page - 1) // self.per_page
+        )
+        self.message: discord.Message | None = None
+        self._build_components()
+
+    def _build_components(self):
+        self.clear_items()
+        if self.total_pages > 1:
+            prev_btn = discord.ui.Button(
+                label="Předchozí",
+                style=discord.ButtonStyle.secondary,
+                disabled=(self.page <= 0),
+            )
+            prev_btn.callback = self._on_prev
+            self.add_item(prev_btn)
+
+            page_btn = discord.ui.Button(
+                label=f"{self.page + 1}/{self.total_pages}",
+                style=discord.ButtonStyle.secondary,
+                disabled=True,
+            )
+            self.add_item(page_btn)
+
+            next_btn = discord.ui.Button(
+                label="Další",
+                style=discord.ButtonStyle.secondary,
+                disabled=(self.page >= self.total_pages - 1),
+            )
+            next_btn.callback = self._on_next
+            self.add_item(next_btn)
+
+    async def _on_prev(self, interaction: discord.Interaction):
+        if self.page > 0:
+            self.page -= 1
+        self._build_components()
+        await interaction.response.edit_message(
+            embed=self.get_embed(), view=self
+        )
+
+    async def _on_next(self, interaction: discord.Interaction):
+        if self.page < self.total_pages - 1:
+            self.page += 1
+        self._build_components()
+        await interaction.response.edit_message(
+            embed=self.get_embed(), view=self
+        )
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except Exception:
+                pass
+
+    def get_embed(self) -> discord.Embed:
+        embed = discord.Embed(
+            title="Evidované pořady",
+            description=f"Celkem evidováno: **{len(self.shows)}** pořad(ů)\n\n",
+            color=0x2B2D31,
+        )
+        start = self.page * self.per_page
+        end = start + self.per_page
+        chunk = self.shows[start:end]
+
+        lines = []
+        for u, active in chunk:
+            meta = self.active_shows_meta.get(u) or {}
+            show_name = meta.get("name") or (
+                u.split("/porady/")[1].rstrip("/") if "/porady/" in u else u
+            )
+            status_text = "Aktivní sledování" if active else "Pozastaveno"
+            lines.append(f"[**{show_name}**](<{u}>)\n-# Stav: {status_text}")
+
+        embed.description += "\n\n".join(lines)
+        if self.total_pages > 1:
+            embed.set_footer(
+                text=f"Stránka {self.page + 1} z {self.total_pages}"
+            )
+        return embed
+
+
 @bot.tree.command(name="list", description="Zobrazí aktuálně sledované pořady")
+@app_commands.guild_only()
 async def list_cmd(interaction: discord.Interaction):
     db_path = guild_db_path(interaction.guild_id)
     with DuckRepo(db_path) as repo:
@@ -376,23 +489,15 @@ async def list_cmd(interaction: discord.Interaction):
         )
         return
 
-    embed = discord.Embed(
-        title="Evidované pořady",
-        description=f"Celkem evidováno: **{len(shows)}** pořad(ů)\n\n",
-        color=0x2B2D31,
+    view = ShowsListView(shows, active_shows_meta)
+    await interaction.response.send_message(
+        embed=view.get_embed(), view=view if view.total_pages > 1 else None
     )
-
-    lines = []
-    for u, active in shows:
-        meta = active_shows_meta.get(u) or {}
-        show_name = meta.get("name") or (
-            u.split("/porady/")[1].rstrip("/") if "/porady/" in u else u
-        )
-        status_text = "Aktivní sledování" if active else "Pozastaveno"
-        lines.append(f"[**{show_name}**](<{u}>)\n-# Stav: {status_text}")
-
-    embed.description += "\n\n".join(lines)
-    await interaction.response.send_message(embed=embed)
+    if view.total_pages > 1:
+        try:
+            view.message = await interaction.original_response()
+        except Exception:
+            pass
 
 
 class EpisodesView(discord.ui.View):
@@ -405,6 +510,7 @@ class EpisodesView(discord.ui.View):
         self.current_filter = (
             "playable" if any(self._is_playable(e) for e in episodes) else "all"
         )
+        self.message: discord.Message | None = None
 
         # Discover unique seasons
         self.seasons = []
@@ -584,6 +690,15 @@ class EpisodesView(discord.ui.View):
             interaction, view=self, button=btn, urls=playable_urls
         )
 
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except Exception:
+                pass
+
     def get_embed(self) -> discord.Embed:
         filtered = self._get_filtered_episodes()
         total = len(filtered)
@@ -663,6 +778,7 @@ class EpisodesView(discord.ui.View):
 @bot.tree.command(
     name="episodes", description="Zobrazí evidované epizody pro vybraný pořad"
 )
+@app_commands.guild_only()
 @app_commands.autocomplete(url=all_shows_autocomplete)
 async def episodes_cmd(interaction: discord.Interaction, url: str):
     canonical_url = normalize_show_url(url)
@@ -680,11 +796,18 @@ async def episodes_cmd(interaction: discord.Interaction, url: str):
     await interaction.response.send_message(
         embed=view.get_embed(), view=view
     )
+    try:
+        view.message = await interaction.original_response()
+    except Exception:
+        pass
 
 
 @bot.tree.command(
     name="download", description="Stáhne konkrétní epizodu podle URL"
 )
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
 async def download_cmd(interaction: discord.Interaction, url: str):
     try:
         assert_allowed_url(url)
@@ -743,6 +866,7 @@ async def download_cmd(interaction: discord.Interaction, url: str):
 @bot.tree.command(
     name="status", description="Zobrazí statistiky sledování a úložiště"
 )
+@app_commands.guild_only()
 async def status_cmd(interaction: discord.Interaction):
     db_path = guild_db_path(interaction.guild_id)
     with DuckRepo(db_path) as repo:
@@ -781,6 +905,9 @@ async def status_cmd(interaction: discord.Interaction):
 
 
 @bot.tree.command(name="sync", description="Okamžitě zkontroluje nové epizody")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
 async def sync_cmd(interaction: discord.Interaction):
     await interaction.response.defer()
     db_path = guild_db_path(interaction.guild_id)
@@ -795,6 +922,32 @@ async def sync_cmd(interaction: discord.Interaction):
         await dispatch_notifications(
             payload, target=interaction.followup, repo=repo
         )
+
+
+@bot.tree.error
+async def on_app_command_error(
+    interaction: discord.Interaction, error: app_commands.AppCommandError
+):
+    if isinstance(error, app_commands.MissingPermissions):
+        missing = ", ".join(error.missing_permissions)
+        msg = f"Nemáte dostatečná oprávnění k tomuto příkazu ({missing})."
+    elif isinstance(error, app_commands.NoPrivateMessage):
+        msg = "Tento příkaz lze použít pouze na serveru."
+    elif isinstance(error, app_commands.CheckFailure):
+        msg = "Nemáte oprávnění ke spuštění tohoto příkazu."
+    else:
+        logger.error(f"Unhandled app command error: {error}", exc_info=error)
+        msg = f"Došlo k neočekávané chybě: {error}"
+
+    embed = discord.Embed(
+        title="Chyba",
+        description=msg,
+        color=15158332,  # Red
+    )
+    if interaction.response.is_done():
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    else:
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 def main():
