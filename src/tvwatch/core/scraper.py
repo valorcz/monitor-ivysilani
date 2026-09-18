@@ -311,14 +311,21 @@ def sync_one_show(
 
     # Upsert episodes and identify new ones for notification
     new_episodes: List[Episode] = []
+    active_playable_ids = set()
     for ep in episodes_raw:
         ep_id = ep.get("id") or extract_episode_id(ep.get("url", ""))
         if not ep_id:
             continue
 
         ep_url = canonical_episode_url(canonical_url, ep_id)
+        if ep.get("playable", True):
+            active_playable_ids.add(ep_url)
+            active_playable_ids.add(ep_id)
+
         raw_name = ep.get("title") or ep.get("name", "Unknown Title")
-        ep_name = format_standardized_title(raw_name, ep.get("season"))
+        ep_name = format_standardized_title(
+            raw_name, ep.get("season"), idec=ep_id
+        )
 
         broadcast_at = None
         date_info = ep.get("date")
@@ -354,6 +361,19 @@ def sync_one_show(
 
         if should_notify:
             new_episodes.append(episode_model)
+
+    # Expire old episodes that are no longer playable on ČT
+    if episodes_raw:
+        expired_count = repo.mark_unplayable_except(
+            canonical_url, active_playable_ids
+        )
+        if expired_count > 0:
+            log.info(
+                f"Marked {expired_count} expired episode(s) as unplayable for {redact_url_query(canonical_url)}"
+            )
+
+    # Standardize all existing episode names in DB for this show
+    repo.standardize_all_episodes(canonical_url)
 
     if new_episodes:
         log.info(

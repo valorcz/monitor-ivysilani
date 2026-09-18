@@ -157,3 +157,57 @@ def test_get_stats():
             assert stats["notified_episodes"] == 1
 
 
+def test_mark_unplayable_except():
+    with tempfile.TemporaryDirectory() as td:
+        path = os.path.join(td, "test_unplayable.duckdb")
+        with DuckRepo(path) as repo:
+            show = "https://www.ceskatelevize.cz/porady/show-1/"
+            repo.add_or_reactivate_show(show)
+            ep1 = f"{show}101/"
+            ep2 = f"{show}102/"
+            repo.record_episode(
+                show_url=show,
+                url=ep1,
+                name="Ep 1",
+                idec="101",
+                metadata={"playable": True},
+            )
+            repo.record_episode(
+                show_url=show,
+                url=ep2,
+                name="Ep 2",
+                idec="102",
+                metadata={"playable": True},
+            )
+
+            # ep2 expires; active is only ep1
+            marked = repo.mark_unplayable_except(show, {ep1})
+            assert marked == 1
+
+            eps = repo.get_show_episodes(show)
+            by_url = {e["url"]: e for e in eps}
+            assert by_url[ep1]["metadata"]["playable"] is True
+            assert by_url[ep2]["metadata"]["playable"] is False
+
+
+def test_standardize_all_episodes():
+    with tempfile.TemporaryDirectory() as td:
+        path = os.path.join(td, "test_std_names.duckdb")
+        with DuckRepo(path) as repo:
+            show = "https://www.ceskatelevize.cz/porady/show-1/"
+            repo.add_or_reactivate_show(show)
+            ep1 = f"{show}225384613200001/"
+            repo.record_episode(
+                show_url=show,
+                url=ep1,
+                name="Stínka - první část",
+                idec="225384613200001",
+                metadata={"season": {"title": "1. řada"}},
+            )
+
+            count = repo.standardize_all_episodes(show)
+            assert count == 1
+            eps = repo.get_show_episodes(show)
+            assert eps[0]["name"] == "S01E01 - Stínka - první část"
+
+

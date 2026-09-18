@@ -95,6 +95,13 @@ def cmd_download(args):
     asyncio.run(download_many(args.urls, logger))
 
 
+def cmd_standardize(args):
+    logger = setup_logger("EpisodeScraper", args.debug)
+    with DuckRepo(args.db) as repo:
+        count = repo.standardize_all_episodes(args.url)
+        logger.info(f"Standardized {count} episode name(s) in database.")
+
+
 def build_parser():
     p = argparse.ArgumentParser(description="Manage and sync a watchlist of TV shows.")
     p.add_argument("--debug", action="store_true", help="Enable DEBUG logging")
@@ -123,6 +130,15 @@ def build_parser():
     sp = sub.add_parser("download", help="Download one or more episode URLs")
     sp.add_argument("urls", nargs="+", help="Episode page URLs to download")
     sp.set_defaults(func=cmd_download)
+
+    sp = sub.add_parser(
+        "standardize",
+        help="Standardize episode names in database (SxxEyy - Title)",
+    )
+    sp.add_argument(
+        "--url", default=None, help="Optional show URL to filter by"
+    )
+    sp.set_defaults(func=cmd_standardize)
     return p
 
 

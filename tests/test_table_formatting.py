@@ -91,5 +91,20 @@ def test_episodes_view_pagination_and_playability():
         assert "S01E01 - Epizoda 1" in all_content
         assert "Vypršelo" in all_content
 
+        # Edge cases: old record without playable flag or with rights restricted
+        old_ep = {"metadata": {}}
+        assert EpisodesView._is_playable(old_ep) is False
+
+        no_rights_ep = {
+            "metadata": {
+                "playable": True,
+                "cardLabels": {"center": "ČT nemá práva pro internet"},
+            }
+        }
+        assert EpisodesView._is_playable(no_rights_ep) is False
+
+        playable_ep = {"metadata": {"playable": True}}
+        assert EpisodesView._is_playable(playable_ep) is True
+
     asyncio.run(_runner())
 

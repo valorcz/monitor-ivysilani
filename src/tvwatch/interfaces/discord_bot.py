@@ -306,11 +306,16 @@ class EpisodesView(discord.ui.View):
     @staticmethod
     def _is_playable(ep: dict) -> bool:
         meta = ep.get("metadata") or {}
+        card_labels = meta.get("cardLabels") or {}
+        if card_labels.get("center") and "nemá práva" in str(
+            card_labels.get("center")
+        ).lower():
+            return False
         if "playable" in meta:
             return bool(meta["playable"])
         if "isPlayable" in meta:
             return bool(meta["isPlayable"])
-        return True
+        return False
 
     def _get_filtered_episodes(self) -> list[dict]:
         if self.current_filter == "playable":
@@ -477,8 +482,9 @@ class EpisodesView(discord.ui.View):
         rows = []
         for ep in chunk:
             s_val = (ep.get("metadata") or {}).get("season")
+            idec_val = ep.get("idec")
             std_name = format_standardized_title(
-                ep.get("name") or "Bez názvu", s_val
+                ep.get("name") or "Bez názvu", s_val, idec=idec_val
             )
             if len(std_name) > 34:
                 std_name = std_name[:31] + "..."
@@ -488,10 +494,14 @@ class EpisodesView(discord.ui.View):
                 .get("cardLabels", {})
                 .get("topLeft")
             )
-            if card_avail:
-                avail = card_avail.replace("\xa0", " ")
+            if self._is_playable(ep):
+                avail = (
+                    card_avail.replace("\xa0", " ")
+                    if card_avail
+                    else "Dostupné"
+                )
             else:
-                avail = "Dostupné" if self._is_playable(ep) else "Vypršelo"
+                avail = "Vypršelo"
 
             bcast = "-"
             b_at = ep.get("broadcast_at")

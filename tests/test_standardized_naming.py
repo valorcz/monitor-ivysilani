@@ -102,3 +102,13 @@ def test_parse_episode_title_and_number(title_input, expected_num, expected_titl
 )
 def test_format_standardized_title(raw_title, season_val, expected):
     assert format_standardized_title(raw_title, season_val) == expected
+
+
+def test_format_standardized_title_with_idec():
+    # 15-digit IDEC with episode number in last 4 digits (0001 -> 1)
+    res = format_standardized_title(
+        "Stínka - první část",
+        {"title": "1. řada"},
+        idec="225384613200001",
+    )
+    assert res == "S01E01 - Stínka - první část"

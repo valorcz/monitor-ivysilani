@@ -187,7 +187,11 @@ def parse_episode_title_and_number(title: str) -> tuple[int | None, str]:
     return None, clean
 
 
-def format_standardized_title(raw_title: str, season_val: Any = None) -> str:
+def format_standardized_title(
+    raw_title: str,
+    season_val: Any = None,
+    idec: str | None = None,
+) -> str:
     """
     Formats a title into a standardized Plex/Kodi format:
       - Both season and episode: 'S06E10 - Kde se vzal Měsíc'
@@ -203,6 +207,13 @@ def format_standardized_title(raw_title: str, season_val: Any = None) -> str:
 
     season_num = parse_season_number(season_val)
     ep_num, clean_title = parse_episode_title_and_number(clean)
+
+    # Fallback to 15-digit IDEC episode index if title didn't contain episode number
+    if ep_num is None and idec and len(idec) == 15 and idec.isdigit():
+        try:
+            ep_num = int(idec[-4:])
+        except ValueError:
+            pass
 
     prefix = ""
     if season_num is not None and ep_num is not None:

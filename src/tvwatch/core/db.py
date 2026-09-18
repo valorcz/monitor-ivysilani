@@ -4,7 +4,12 @@ from datetime import datetime, timezone, timedelta
 import json
 import threading
 import duckdb
-from .utils import normalize_show_url, canonical_episode_url, extract_episode_id
+from .utils import (
+    normalize_show_url,
+    canonical_episode_url,
+    extract_episode_id,
+    format_standardized_title,
+)
 from .config import CONFIG
 
 
@@ -389,6 +394,77 @@ class DuckRepo:
                     [show_url],
                 ).fetchone()
             return bool(row)
+
+    def mark_unplayable_except(
+        self, show_url: str, active_ep_identifiers: set[str]
+    ) -> int:
+        """
+        Marks all episodes of a show that are NOT in active_ep_identifiers as unplayable
+        (playable=False in metadata).
+        Returns the number of episodes marked unplayable.
+        """
+        canonical_show = normalize_show_url(show_url)
+        count = 0
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT url, idec, metadata FROM episodes WHERE show_url = ?",
+                [canonical_show],
+            ).fetchall()
+            for r in rows:
+                url, idec, meta_raw = r[0], r[1], r[2]
+                if url not in active_ep_identifiers and (
+                    not idec or idec not in active_ep_identifiers
+                ):
+                    meta = (
+                        json.loads(meta_raw)
+                        if meta_raw and isinstance(meta_raw, str)
+                        else (meta_raw or {})
+                    )
+                    if meta.get("playable") is not False:
+                        meta["playable"] = False
+                        self.conn.execute(
+                            "UPDATE episodes SET metadata = ? WHERE url = ?",
+                            [json.dumps(meta, ensure_ascii=False), url],
+                        )
+                        count += 1
+        return count
+
+    def standardize_all_episodes(self, show_url: Optional[str] = None) -> int:
+        """
+        Standardizes the 'name' column for episodes in the database using format_standardized_title.
+        If show_url is provided, only standardizes episodes for that show.
+        Returns the number of episodes updated.
+        """
+        query = "SELECT url, idec, name, metadata FROM episodes"
+        params = []
+        if show_url:
+            query += " WHERE show_url = ?"
+            params.append(normalize_show_url(show_url))
+
+        count = 0
+        with self._lock:
+            rows = self.conn.execute(query, params).fetchall()
+            for r in rows:
+                url, idec, cur_name, meta_raw = r[0], r[1], r[2], r[3]
+                meta = (
+                    json.loads(meta_raw)
+                    if meta_raw and isinstance(meta_raw, str)
+                    else (meta_raw or {})
+                )
+                raw_title = (
+                    meta.get("title") or meta.get("name") or cur_name or ""
+                )
+                season = meta.get("season")
+                std_name = format_standardized_title(
+                    raw_title, season, idec=idec
+                )
+                if std_name and std_name != cur_name:
+                    self.conn.execute(
+                        "UPDATE episodes SET name = ? WHERE url = ?",
+                        [std_name, url],
+                    )
+                    count += 1
+        return count
 
     def get_stats(self) -> dict:
         """
