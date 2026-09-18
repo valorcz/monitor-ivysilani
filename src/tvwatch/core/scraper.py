@@ -425,7 +425,7 @@ async def sync_all_concurrent(
     results: List[SyncResult] = []
     for item in finished:
         if isinstance(item, Exception):
-            log.error(f"Error during sync: {item}")
+            log.error(f"Error during sync: {item}", exc_info=item)
             continue
         if item and item.new_episodes:
             results.append(item)

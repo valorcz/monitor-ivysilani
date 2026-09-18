@@ -78,3 +78,41 @@ def test_episode_recording_and_cooldown():
                 )
                 is False
             )
+
+
+def test_concurrent_episode_recording():
+    import concurrent.futures
+
+    with tempfile.TemporaryDirectory() as td:
+        path = os.path.join(td, "test_concurrent.duckdb")
+        with DuckRepo(path) as repo:
+            show_url = "https://www.ceskatelevize.cz/porady/123-test/"
+            repo.add_or_reactivate_show(show_url)
+
+            def worker(worker_id: int):
+                errors = []
+                for i in range(20):
+                    ep_id = f"225384613200{i:03d}"
+                    ep_url = f"{show_url}{ep_id}/"
+                    try:
+                        repo.record_episode(
+                            show_url=show_url,
+                            url=ep_url,
+                            name=f"Episode {i}",
+                            idec=ep_id,
+                            backfill=(worker_id % 2 == 0),
+                        )
+                        repo.mark_episodes_notified([ep_url])
+                        repo.get_active_shows()
+                    except Exception as e:
+                        errors.append(e)
+                return errors
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+                futures = [executor.submit(worker, wid) for wid in range(8)]
+                all_errors = []
+                for f in concurrent.futures.as_completed(futures):
+                    all_errors.extend(f.result())
+
+            assert all_errors == [], f"Encountered concurrency errors: {all_errors}"
+
