@@ -6,7 +6,7 @@ services:
     # Override the default entrypoint
     entrypoint: tvwatch-bot
     env_file:
-      - .env.docker
+      - .env
     volumes:
       # Maps the local ./data folder to the container's /app/data folder
       - ./data:/app/data

@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime
-from typing import Iterable, List, Tuple
+from typing import Iterable, List, Tuple, Callable, Awaitable, Optional
 
 from .config import CONFIG
 from .net import assert_allowed_url
@@ -11,8 +11,6 @@ COMMON_ARGS = [
     "--force-ipv4",
     #    "--restrict-filenames",
     "--verbose",
-    "-o",
-    "%(title)s_[%(id)s].%(ext)s",
     "--audio-multistreams",
     "-f",
     "bv*+mergeall[vcodec=none]",
@@ -35,6 +33,7 @@ def _base_cmd() -> list[str]:
     cmd = CONFIG.ytdlp_cmd[:]  # copy
     # Ensure we always set the output directory (safe, controlled path)
     cmd += ["-P", CONFIG.DOWNLOAD_DIR]
+    cmd += ["-o", CONFIG.YTDLP_OUTPUT_TEMPLATE]
     cmd += COMMON_ARGS
     return cmd
 
@@ -118,27 +117,44 @@ async def download_one(url: str, logger) -> Tuple[str, bool, str]:
 
 
 async def download_many(
-    urls: Iterable[str] | None, logger
+    urls: Iterable[str] | None,
+    logger,
+    progress_callback: Optional[
+        Callable[[int, int, str, Optional[bool]], Awaitable[None]]
+    ] = None,
 ) -> List[Tuple[str, bool, str]]:
     """
-    Downloads provided URLs sequentially (simple and predictable). For limited
-    concurrency, we can expand this later with a semaphore and gather().
+    Downloads provided URLs sequentially (simple and predictable).
+    Supports progress_callback(current_idx, total_count, url, status)
+    where status is None at start, and bool (success/fail) upon completion.
     """
     results: List[Tuple[str, bool, str]] = []
-    total = 0
-    ok = 0
-
     if urls is None:
         return results
 
-    for u in urls:
-        total += 1
-        logger.info("Queue %d: %s", total, u)
+    urls_list = list(urls)
+    total = len(urls_list)
+    ok = 0
+
+    for i, u in enumerate(urls_list, 1):
+        logger.info("Queue %d/%d: %s", i, total, u)
+        if progress_callback:
+            try:
+                await progress_callback(i, total, u, None)
+            except Exception as ex:
+                logger.warning(f"Error in progress_callback start: {ex}")
+
         r = await download_one(u, logger)
         results.append(r)
         if r[1]:
             ok += 1
-        logger.info("Progress: %d/%d OK", ok, total)
+        logger.info("Progress: %d/%d OK", ok, i)
+
+        if progress_callback:
+            try:
+                await progress_callback(i, total, u, r[1])
+            except Exception as ex:
+                logger.warning(f"Error in progress_callback finish: {ex}")
 
     logger.info("Batch complete: %d/%d OK", ok, total)
     return results

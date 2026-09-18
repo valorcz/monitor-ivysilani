@@ -48,3 +48,54 @@ def test_download_one_monkeypatch(monkeypatch):
         assert ok and not err
 
     asyncio.run(run())
+
+
+def test_base_cmd_includes_output_template():
+    cmd = dl._base_cmd()
+    assert "-o" in cmd
+    idx = cmd.index("-o")
+    assert cmd[idx + 1] == dl.CONFIG.YTDLP_OUTPUT_TEMPLATE
+    assert "-P" in cmd
+    p_idx = cmd.index("-P")
+    assert cmd[p_idx + 1] == dl.CONFIG.DOWNLOAD_DIR
+
+
+def test_download_many_progress_callback(monkeypatch):
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_exec)
+
+    class _L:
+        def info(self, *a, **k):
+            pass
+
+        def debug(self, *a, **k):
+            pass
+
+        def error(self, *a, **k):
+            pass
+
+        def warning(self, *a, **k):
+            pass
+
+    events = []
+
+    async def _progress(idx, tot, url, status):
+        events.append((idx, tot, url, status))
+
+    async def run():
+        urls = [
+            "https://ceskatelevize.cz/porady/x/1",
+            "https://ceskatelevize.cz/porady/x/2",
+        ]
+        results = await dl.download_many(urls, logger=_L(), progress_callback=_progress)
+        assert len(results) == 2
+        assert all(ok for _, ok, _ in results)
+
+        # Expect 4 events: 2 starts (status=None), 2 completions (status=True)
+        assert len(events) == 4
+        assert events[0] == (1, 2, urls[0], None)
+        assert events[1] == (1, 2, urls[0], True)
+        assert events[2] == (2, 2, urls[1], None)
+        assert events[3] == (2, 2, urls[1], True)
+
+    asyncio.run(run())
+

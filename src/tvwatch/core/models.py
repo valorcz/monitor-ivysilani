@@ -15,6 +15,7 @@ def _validate_allowed(url: str) -> str:
 class Episode(BaseModel):
     url: HttpUrl
     name: Optional[str] = None
+    idec: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
     position: Optional[int] = None
 

@@ -49,28 +49,57 @@ def cmd_list(args):
                 print(f"- {url} [{'active' if active else 'disabled'}]")
 
 
-async def run_sync(repo, logger, download: bool):
+# async def run_sync(repo, logger, download: bool):
+#    results = await sync_all_concurrent(repo, logger)
+#    return results
+
+
+async def run_sync(repo, logger, download_flag=False):
+    logger.info("Starting synchronization...")
+    active_urls = repo.get_active_urls()
+
+    if not active_urls:
+        logger.info("No active shows to sync. Add some to your watchlist first!")
+        return []
+
+    logger.info(f"Found {len(active_urls)} active show(s). Syncing now...")
     results = await sync_all_concurrent(repo, logger)
+
+    if results:
+        total_new = sum(len(r.new_episodes) for r in results)
+        logger.info(f"Found {total_new} new episode(s) across {len(results)} show(s)!")
+    else:
+        logger.info("No new episodes found.")
+
     return results
 
 
 def cmd_sync(args):
     logger = setup_logger("EpisodeScraper", args.debug)
     with DuckRepo(args.db) as repo:
-        # results = sync_all(repo, logger)
         results = asyncio.run(run_sync(repo, logger, args.download))
-
         output_json([r.to_payload() for r in results])
-        if args.download and results:
-            urls = [e.url for r in results for e in r.new_episodes if e.url]
-            if urls:
-                logger.info(f"Downloading {len(urls)} newly discovered episode(s)...")
-                asyncio.run(download_many(urls.__reduce__(), logger))
+
+        if results:
+            new_urls = [str(e.url) for r in results for e in r.new_episodes if e.url]
+            if args.download and new_urls:
+                logger.info(
+                    f"Downloading {len(new_urls)} newly discovered episode(s)..."
+                )
+                asyncio.run(download_many(new_urls, logger))
+            repo.mark_episodes_notified(new_urls)
 
 
 def cmd_download(args):
     logger = setup_logger("EpisodeScraper", args.debug)
     asyncio.run(download_many(args.urls, logger))
+
+
+def cmd_standardize(args):
+    logger = setup_logger("EpisodeScraper", args.debug)
+    with DuckRepo(args.db) as repo:
+        count = repo.standardize_all_episodes(args.url)
+        logger.info(f"Standardized {count} episode name(s) in database.")
 
 
 def build_parser():
@@ -101,6 +130,15 @@ def build_parser():
     sp = sub.add_parser("download", help="Download one or more episode URLs")
     sp.add_argument("urls", nargs="+", help="Episode page URLs to download")
     sp.set_defaults(func=cmd_download)
+
+    sp = sub.add_parser(
+        "standardize",
+        help="Standardize episode names in database (SxxEyy - Title)",
+    )
+    sp.add_argument(
+        "--url", default=None, help="Optional show URL to filter by"
+    )
+    sp.set_defaults(func=cmd_standardize)
     return p
 
 

@@ -64,6 +64,67 @@ class CeskaTelevizeIE(InfoExtractor):
             NOT_AVAILABLE_STRING = 'This content is not available. Possibly georestricted or license expired.'
             raise ExtractorError(NOT_AVAILABLE_STRING, expected=True)
 
+        # Extract metadata for Plex / Jellyfin standardized naming
+        show_title = (
+            traverse_obj(next_data, ('props', 'pageProps', 'data', 'mediaMeta', 'show', 'title'))
+            or traverse_obj(next_data, ('props', 'pageProps', 'data', 'show', 'title'))
+        )
+        if not show_title:
+            slug_m = re.search(r'/porady/(?:\d+-)?([^/?#]+)', parsed_url.path)
+            show_title = slug_m.group(1).replace('-', ' ') if slug_m else 'Show'
+
+        apollo_ep = traverse_obj(next_data, ('props', 'apolloState', f'EpisodePreview:{playlist_id}')) or {}
+        season_title = traverse_obj(apollo_ep, ('season', 'title'))
+        ep_raw_title = traverse_obj(apollo_ep, ('title',)) or playlist_title or ''
+
+        season_num = None
+        if season_title:
+            m_roman = re.search(r'(?:^|\b(?:řada|rada|season|série|serie)\s*)([IVXLCDM]+)\.?', season_title, re.IGNORECASE)
+            if m_roman:
+                season_num = self._roman_to_int(m_roman.group(1))
+            if season_num is None:
+                m_arabic = re.search(r'(?:^|\b(?:řada|rada|season|série|serie)\s*)(\d+)\.?', season_title, re.IGNORECASE)
+                if m_arabic:
+                    season_num = int(m_arabic.group(1))
+
+        clean_norm = re.sub(r'\s+', ' ', ep_raw_title.replace('\xa0', ' ')).strip()
+        ep_num = None
+        clean_ep_title = clean_norm
+
+        m_ep = re.match(r'^(\d+)/\d+(?:[\s:\-–—]+(.*))?$', clean_norm)
+        if m_ep:
+            ep_num = int(m_ep.group(1))
+            clean_ep_title = (m_ep.group(2) or '').strip()
+        else:
+            m_ep2 = re.match(r'^(?:(\d+)\.\s*(?:díl|dil|epizoda|část|cast)|(?:díl|dil|epizoda|část|cast)\s*(\d+)\.?)(?:[\s:\-–—]+(.*))?$', clean_norm, re.IGNORECASE)
+            if m_ep2:
+                ep_num = int(m_ep2.group(1) or m_ep2.group(2))
+                clean_ep_title = (m_ep2.group(3) or '').strip()
+
+        if ep_num is None and playlist_id and re.match(r'^\d{15}$', playlist_id):
+            part_num = int(playlist_id[-4:])
+            if 1 <= part_num <= 999:
+                ep_num = part_num
+
+        if show_title and clean_ep_title.endswith(f' - {show_title}'):
+            clean_ep_title = clean_ep_title[:-len(f' - {show_title}')].strip()
+        if show_title and clean_ep_title.startswith(f'{show_title} - '):
+            clean_ep_title = clean_ep_title[len(f'{show_title} - '):].strip()
+
+        clean_show_dir = self._sanitize_slug(show_title)
+        effective_season = season_num if season_num is not None else 1
+        clean_season_dir = f'season_{effective_season:02d}'
+        ep_slug = self._sanitize_slug(clean_ep_title)
+        if ep_num is not None:
+            tag = f's{effective_season:02d}e{ep_num:02d}'
+        else:
+            tag = f's{effective_season:02d}'
+
+        parts = [clean_show_dir, tag]
+        if ep_slug:
+            parts.append(ep_slug)
+        clean_filename = '_'.join(parts)
+
         entries = []
         for stream_index, stream in enumerate(api_response['streams']):
             stream_formats = self._extract_mpd_formats(
@@ -97,11 +158,47 @@ class CeskaTelevizeIE(InfoExtractor):
                 'formats': stream_formats,
                 'subtitles': subtitles,
                 'is_live': 0,
+                'series': show_title,
+                'season_number': effective_season,
+                'episode_number': ep_num,
+                'episode': clean_ep_title,
+                'clean_show_dir': clean_show_dir,
+                'clean_season_dir': clean_season_dir,
+                'clean_filename': clean_filename,
             })
 
         if len(entries) == 1:
             return entries[0]
         return self.playlist_result(entries, playlist_id, playlist_title, playlist_description)
+
+    @staticmethod
+    def _sanitize_slug(text):
+        if not text:
+            return ''
+        import unicodedata
+        text = unicodedata.normalize('NFC', text.replace('\xa0', ' '))
+        text = text.lower()
+        text = re.sub(r'[/\\\?%*:|\"<>—–\-_.,;()\[\]{}!]+|\s+', '_', text)
+        text = re.sub(r'_+', '_', text).strip('_')
+        return text
+
+    @staticmethod
+    def _roman_to_int(roman):
+        if not roman:
+            return None
+        roman_map = {'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000}
+        val = 0
+        prev_val = 0
+        for ch in reversed(roman.strip().upper()):
+            if ch not in roman_map:
+                return None
+            curr = roman_map[ch]
+            if curr < prev_val:
+                val -= curr
+            else:
+                val += curr
+            prev_val = curr
+        return val if val > 0 else None
 
     def _get_subtitles(self, episode_id, subs):
         url = None

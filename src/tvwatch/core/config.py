@@ -16,7 +16,14 @@ class Config(BaseSettings):
     # --- Networking ---
     HTTP_TIMEOUT: int = Field(default=10)
     USER_AGENT: str = Field(
-        default="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        default="Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0"
+    )
+
+    # --- Notifications & Scraper ---
+    NOTIFICATION_COOLDOWN_DAYS: int = Field(default=30)
+    NOTIFY_ON_INITIAL_ADD: bool = Field(default=False)
+    GRAPHQL_PERSISTED_HASH: str = Field(
+        default="e627db8ae17ccfbb925f298f9d6ba46d80f65fcea7c7d824a87457400a6c3035"
     )
 
     # --- Allowed URL pattern (ČT only) ---
@@ -30,6 +37,10 @@ class Config(BaseSettings):
     YTDLP_SCRIPT_NAME: str = Field(default="yt-dlp.sh")
     # Extra args to prepend (space-separated string), optional
     YTDLP_EXTRA_ARGS: str = Field(default="")
+    # Output template for yt-dlp (defaults to Plex/Jellyfin structured hierarchy)
+    YTDLP_OUTPUT_TEMPLATE: str = Field(
+        default="%(clean_show_dir)s/%(clean_season_dir)s/%(clean_filename)s.%(ext)s"
+    )
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
