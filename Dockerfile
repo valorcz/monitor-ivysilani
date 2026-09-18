@@ -47,25 +47,26 @@ VOLUME ["/app/data", "/download"]
 # These map to tvwatch.core.config.Config fields
 ENV DATA_DIR=/app/data \
     DOWNLOAD_DIR=/download \
-    YTDLP_EXECUTABLE=/opt/yt-dlp/yt-dlp.sh \
+    YTDLP_EXECUTABLE=/yt-dlp/yt-dlp.sh \
     YTDLP_EXTRA_ARGS= \
-    YTDLP_PREFIX_DIR=/opt/yt-dlp \
+    YTDLP_PREFIX_DIR=/yt-dlp \
     YTDLP_SCRIPT_NAME=yt-dlp.sh
 
 # Copy your project (src layout)
+# (Optional) create a non-root user for better security
+RUN useradd -m -u 10001 tvw \
+ && chown -R tvw:tvw /app
+USER tvw
+
 # Keep layer caching efficient by copying pyproject first
 COPY --chown=tvw:tvw pyproject.toml .
 COPY --chown=tvw:tvw src ./src
 
 # Install your package + deps into the system Python using uv
 # RUN uv pip install -e .
+USER root
 RUN uv pip install .
 RUN uv pip install /yt-dlp/
-
-# (Optional) create a non-root user for better security
-RUN useradd -m -u 10001 tvw \
- && chown -R tvw:tvw /app
-USER tvw
 
 # Default command shows help; override in docker run/compose
 # CMD ["python", "-m", "tvwatch.interfaces.cli"]
