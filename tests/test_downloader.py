@@ -48,3 +48,14 @@ def test_download_one_monkeypatch(monkeypatch):
         assert ok and not err
 
     asyncio.run(run())
+
+
+def test_base_cmd_includes_output_template():
+    cmd = dl._base_cmd()
+    assert "-o" in cmd
+    idx = cmd.index("-o")
+    assert cmd[idx + 1] == dl.CONFIG.YTDLP_OUTPUT_TEMPLATE
+    assert "-P" in cmd
+    p_idx = cmd.index("-P")
+    assert cmd[p_idx + 1] == dl.CONFIG.DOWNLOAD_DIR
+

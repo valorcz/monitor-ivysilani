@@ -61,6 +61,7 @@ Settings can be customized via environment variables or a `.env` file in the pro
 | `YTDLP_EXECUTABLE` | `null` | Explicit path to yt-dlp binary (overrides prefix + script name). |
 | `YTDLP_PREFIX_DIR` | `/yt-dlp` | Directory containing the patched yt-dlp wrapper script. |
 | `YTDLP_SCRIPT_NAME` | `yt-dlp.sh` | Wrapper script name. |
+| `YTDLP_OUTPUT_TEMPLATE` | `%(clean_show_dir)s/%(clean_season_dir)s/%(clean_filename)s.%(ext)s` | Output template for yt-dlp (Plex/Jellyfin nested hierarchy). |
 
 ---
 

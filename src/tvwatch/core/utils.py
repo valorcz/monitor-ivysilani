@@ -1,4 +1,5 @@
 import re
+from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 
@@ -49,3 +50,170 @@ def extract_episode_id(url: str) -> str | None:
     # Generic trailing number
     match_fallback = re.search(r"/(\d{10,20})/?$", url)
     return match_fallback.group(1) if match_fallback else None
+
+
+CZECH_MONTHS = {
+    "ledna",
+    "února",
+    "unora",
+    "března",
+    "brezna",
+    "dubna",
+    "května",
+    "kvetna",
+    "června",
+    "cervna",
+    "července",
+    "cervence",
+    "srpna",
+    "září",
+    "zari",
+    "října",
+    "rijna",
+    "listopadu",
+    "prosince",
+}
+
+
+def roman_to_int(roman: str) -> int | None:
+    """
+    Translates a Roman numeral string (e.g. 'VI', 'iv', 'XII') to an integer (e.g. 6, 4, 12).
+    Returns None if the string is empty or contains non-Roman characters.
+    """
+    if not roman:
+        return None
+    roman_map = {
+        "I": 1,
+        "V": 5,
+        "X": 10,
+        "L": 50,
+        "C": 100,
+        "D": 500,
+        "M": 1000,
+    }
+    val = 0
+    prev_val = 0
+    for ch in reversed(roman.strip().upper()):
+        if ch not in roman_map:
+            return None
+        curr = roman_map[ch]
+        if curr < prev_val:
+            val -= curr
+        else:
+            val += curr
+        prev_val = curr
+    return val if val > 0 else None
+
+
+def parse_season_number(season_val: Any) -> int | None:
+    """
+    Parses the season number from a ČT season string or object.
+    Supports Roman numerals ('VI. řada', 'I. řada') and Arabic numerals ('1. řada', 'Season 2').
+    """
+    if not season_val:
+        return None
+    if isinstance(season_val, dict):
+        season_str = season_val.get("title") or season_val.get("name") or ""
+    else:
+        season_str = str(season_val)
+
+    season_str = season_str.replace("\xa0", " ").strip()
+    if not season_str:
+        return None
+
+    m_roman = re.search(
+        r"(?:^|\b(?:řada|rada|season|série|serie)\s*)([IVXLCDM]+)\.?(?:\s*(?:řada|rada|season|série|serie)|$|\b)",
+        season_str,
+        re.IGNORECASE,
+    )
+    if m_roman:
+        val = roman_to_int(m_roman.group(1))
+        if val is not None:
+            return val
+
+    m_arabic = re.search(
+        r"(?:^|\b(?:řada|rada|season|série|serie)\s*)(\d+)\.?(?:\s*(?:řada|rada|season|série|serie)|$|\b)",
+        season_str,
+        re.IGNORECASE,
+    )
+    if m_arabic:
+        try:
+            return int(m_arabic.group(1))
+        except ValueError:
+            pass
+
+    return None
+
+
+def parse_episode_title_and_number(title: str) -> tuple[int | None, str]:
+    """
+    Parses an episode title string, extracting the episode number (if present)
+    and the clean episode title.
+    Examples:
+      '10/26 Kde se vzal Měsíc' -> (10, 'Kde se vzal Měsíc')
+      '1. díl - Zrození'       -> (1, 'Zrození')
+      '8. srpna 2005'          -> (None, '8. srpna 2005')
+    """
+    if not title:
+        return None, ""
+    clean = re.sub(r"\s+", " ", title.replace("\xa0", " ")).strip()
+    if re.match(r"^S\d+(?:E\d+)?(?:\s*-\s*.*)?$", clean, re.IGNORECASE):
+        return None, clean
+
+    # '10/26 Title' or '10/26'
+    m = re.match(r"^(\d+)/\d+(?:[\s:\-–—]+(.*))?$", clean)
+    if m:
+        return int(m.group(1)), (m.group(2) or "").strip()
+
+    # '10. díl - Title' or '10. díl' or 'Díl 10 - Title'
+    m = re.match(
+        r"^(?:(\d+)\.\s*(?:díl|dil|epizoda|část|cast)|(?:díl|dil|epizoda|část|cast)\s*(\d+)\.?)(?:[\s:\-–—]+(.*))?$",
+        clean,
+        re.IGNORECASE,
+    )
+    if m:
+        num = int(m.group(1) or m.group(2))
+        return num, (m.group(3) or "").strip()
+
+    # '10. Title' (excluding dates like '8. srpna 2005')
+    m = re.match(r"^(\d+)\.[\s\-–—]+(.*)$", clean)
+    if m:
+        num_str, rest = m.group(1), m.group(2).strip()
+        first_word = rest.split()[0].lower() if rest else ""
+        if first_word not in CZECH_MONTHS:
+            return int(num_str), rest
+
+    return None, clean
+
+
+def format_standardized_title(raw_title: str, season_val: Any = None) -> str:
+    """
+    Formats a title into a standardized Plex/Kodi format:
+      - Both season and episode: 'S06E10 - Kde se vzal Měsíc'
+      - Season only: 'S06 - Kde se vzal Měsíc'
+      - Episode only: 'E10 - Kde se vzal Měsíc'
+      - Neither: preserves cleaned original title
+    """
+    if not raw_title:
+        return ""
+    clean = re.sub(r"\s+", " ", raw_title.replace("\xa0", " ")).strip()
+    if re.match(r"^S\d+(?:E\d+)?(?:\s*-\s*.*)?$", clean, re.IGNORECASE):
+        return clean
+
+    season_num = parse_season_number(season_val)
+    ep_num, clean_title = parse_episode_title_and_number(clean)
+
+    prefix = ""
+    if season_num is not None and ep_num is not None:
+        prefix = f"S{season_num:02d}E{ep_num:02d}"
+    elif season_num is not None:
+        prefix = f"S{season_num:02d}"
+    elif ep_num is not None:
+        prefix = f"E{ep_num:02d}"
+
+    if prefix and clean_title:
+        return f"{prefix} - {clean_title}"
+    elif prefix:
+        return prefix
+    return clean_title
+

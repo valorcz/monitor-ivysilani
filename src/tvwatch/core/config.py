@@ -37,6 +37,10 @@ class Config(BaseSettings):
     YTDLP_SCRIPT_NAME: str = Field(default="yt-dlp.sh")
     # Extra args to prepend (space-separated string), optional
     YTDLP_EXTRA_ARGS: str = Field(default="")
+    # Output template for yt-dlp (defaults to Plex/Jellyfin structured hierarchy)
+    YTDLP_OUTPUT_TEMPLATE: str = Field(
+        default="%(clean_show_dir)s/%(clean_season_dir)s/%(clean_filename)s.%(ext)s"
+    )
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

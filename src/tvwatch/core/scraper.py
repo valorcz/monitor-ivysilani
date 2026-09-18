@@ -13,6 +13,7 @@ from .models import Episode, SyncResult, TVSeries
 from .utils import (
     canonical_episode_url,
     extract_episode_id,
+    format_standardized_title,
     normalize_show_url,
     redact_url_query,
 )
@@ -316,7 +317,8 @@ def sync_one_show(
             continue
 
         ep_url = canonical_episode_url(canonical_url, ep_id)
-        ep_name = ep.get("title") or ep.get("name", "Unknown Title")
+        raw_name = ep.get("title") or ep.get("name", "Unknown Title")
+        ep_name = format_standardized_title(raw_name, ep.get("season"))
 
         broadcast_at = None
         date_info = ep.get("date")

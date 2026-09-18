@@ -11,8 +11,6 @@ COMMON_ARGS = [
     "--force-ipv4",
     #    "--restrict-filenames",
     "--verbose",
-    "-o",
-    "%(title)s_[%(id)s].%(ext)s",
     "--audio-multistreams",
     "-f",
     "bv*+mergeall[vcodec=none]",
@@ -35,6 +33,7 @@ def _base_cmd() -> list[str]:
     cmd = CONFIG.ytdlp_cmd[:]  # copy
     # Ensure we always set the output directory (safe, controlled path)
     cmd += ["-P", CONFIG.DOWNLOAD_DIR]
+    cmd += ["-o", CONFIG.YTDLP_OUTPUT_TEMPLATE]
     cmd += COMMON_ARGS
     return cmd
 
