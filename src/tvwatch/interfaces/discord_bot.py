@@ -17,6 +17,7 @@ from tvwatch.core.scraper import sync_all_concurrent, sync_one_show
 from tvwatch.core.utils import (
     format_ascii_table,
     format_discord_timestamp,
+    format_standardized_title,
     normalize_show_url,
 )
 
@@ -274,6 +275,242 @@ async def list_cmd(interaction: discord.Interaction):
     await interaction.response.send_message(msg)
 
 
+class EpisodesView(discord.ui.View):
+    def __init__(self, canonical_url: str, episodes: list[dict]):
+        super().__init__(timeout=300)
+        self.canonical_url = canonical_url
+        self.all_episodes = episodes
+        self.page = 0
+        self.per_page = 10
+        self.current_filter = (
+            "playable" if any(self._is_playable(e) for e in episodes) else "all"
+        )
+
+        # Discover unique seasons
+        self.seasons = []
+        seen_seasons = set()
+        for ep in episodes:
+            s_obj = (ep.get("metadata") or {}).get("season")
+            if isinstance(s_obj, dict):
+                s_title = s_obj.get("title")
+            elif isinstance(s_obj, str):
+                s_title = s_obj
+            else:
+                s_title = None
+            if s_title and s_title not in seen_seasons:
+                seen_seasons.add(s_title)
+                self.seasons.append(s_title)
+
+        self._build_components()
+
+    @staticmethod
+    def _is_playable(ep: dict) -> bool:
+        meta = ep.get("metadata") or {}
+        if "playable" in meta:
+            return bool(meta["playable"])
+        if "isPlayable" in meta:
+            return bool(meta["isPlayable"])
+        return True
+
+    def _get_filtered_episodes(self) -> list[dict]:
+        if self.current_filter == "playable":
+            return [e for e in self.all_episodes if self._is_playable(e)]
+        elif self.current_filter == "all":
+            return self.all_episodes
+        else:
+            return [
+                e
+                for e in self.all_episodes
+                if ((e.get("metadata") or {}).get("season") or {}).get("title")
+                == self.current_filter
+                or (e.get("metadata") or {}).get("season") == self.current_filter
+            ]
+
+    def _build_components(self):
+        self.clear_items()
+        filtered = self._get_filtered_episodes()
+        total_pages = max(1, (len(filtered) + self.per_page - 1) // self.per_page)
+        if self.page >= total_pages:
+            self.page = total_pages - 1
+
+        # 1. Season / Playability Dropdown (Row 0)
+        select_options = []
+        playable_count = sum(1 for e in self.all_episodes if self._is_playable(e))
+        select_options.append(
+            discord.SelectOption(
+                label=f"Pouze dostupné ({playable_count})",
+                value="playable",
+                default=(self.current_filter == "playable"),
+                description="Zobrazit pouze epizody, které lze přehrát a stáhnout",
+            )
+        )
+        select_options.append(
+            discord.SelectOption(
+                label=f"Všechny epizody ({len(self.all_episodes)})",
+                value="all",
+                default=(self.current_filter == "all"),
+                description="Zobrazit kompletní archiv pořadu",
+            )
+        )
+        for s in self.seasons[:23]:
+            s_count = sum(
+                1
+                for e in self.all_episodes
+                if ((e.get("metadata") or {}).get("season") or {}).get("title")
+                == s
+                or (e.get("metadata") or {}).get("season") == s
+            )
+            select_options.append(
+                discord.SelectOption(
+                    label=f"{s} ({s_count})",
+                    value=s,
+                    default=(self.current_filter == s),
+                )
+            )
+
+        select = discord.ui.Select(
+            placeholder="Filtrovat podle řady / dostupnosti...",
+            options=select_options,
+            row=0,
+        )
+        select.callback = self._on_select_filter
+        self.add_item(select)
+
+        # 2. Pagination buttons (Row 1)
+        prev_btn = discord.ui.Button(
+            label="Předchozí",
+            style=discord.ButtonStyle.secondary,
+            disabled=(self.page <= 0),
+            row=1,
+        )
+        prev_btn.callback = self._on_prev
+        self.add_item(prev_btn)
+
+        page_btn = discord.ui.Button(
+            label=f"{self.page + 1}/{total_pages}",
+            style=discord.ButtonStyle.secondary,
+            disabled=True,
+            row=1,
+        )
+        self.add_item(page_btn)
+
+        next_btn = discord.ui.Button(
+            label="Další",
+            style=discord.ButtonStyle.secondary,
+            disabled=(self.page >= total_pages - 1),
+            row=1,
+        )
+        next_btn.callback = self._on_next
+        self.add_item(next_btn)
+
+        # 3. Download Playable Button (Row 1)
+        playable_in_filtered = [
+            e["url"] for e in filtered if self._is_playable(e)
+        ]
+        dl_btn = discord.ui.Button(
+            label=f"Stáhnout dostupné ({len(playable_in_filtered)})",
+            style=discord.ButtonStyle.primary,
+            disabled=(len(playable_in_filtered) == 0),
+            row=1,
+        )
+        dl_btn.callback = self._on_download
+        self.add_item(dl_btn)
+
+    async def _on_select_filter(self, interaction: discord.Interaction):
+        self.current_filter = interaction.data["values"][0]  # type: ignore
+        self.page = 0
+        self._build_components()
+        await interaction.response.edit_message(
+            content=self.get_content(), view=self
+        )
+
+    async def _on_prev(self, interaction: discord.Interaction):
+        if self.page > 0:
+            self.page -= 1
+        self._build_components()
+        await interaction.response.edit_message(
+            content=self.get_content(), view=self
+        )
+
+    async def _on_next(self, interaction: discord.Interaction):
+        self.page += 1
+        self._build_components()
+        await interaction.response.edit_message(
+            content=self.get_content(), view=self
+        )
+
+    async def _on_download(self, interaction: discord.Interaction):
+        filtered = self._get_filtered_episodes()
+        playable_urls = [e["url"] for e in filtered if self._is_playable(e)]
+        if not playable_urls:
+            await interaction.response.send_message(
+                "Žádné dostupné epizody ke stažení.", ephemeral=True
+            )
+            return
+
+        dl_buttons = [
+            item
+            for item in self.children
+            if isinstance(item, discord.ui.Button)
+            and "Stáhnout" in (item.label or "")
+        ]
+        if dl_buttons:
+            dl_buttons[0].label = "Stahuje se..."
+            dl_buttons[0].disabled = True
+        await interaction.response.edit_message(view=self)
+
+        results = await download_many(playable_urls, logger)
+        ok = sum(1 for _, s, _ in results if s)
+        if dl_buttons:
+            dl_buttons[0].label = f"Staženo ({ok}/{len(results)})"
+            dl_buttons[0].style = discord.ButtonStyle.success
+        await interaction.edit_original_response(view=self)
+
+    def get_content(self) -> str:
+        filtered = self._get_filtered_episodes()
+        total = len(filtered)
+        start = self.page * self.per_page
+        end = start + self.per_page
+        chunk = filtered[start:end]
+
+        headers = ["Epizoda", "Dostupnost", "Vysíláno"]
+        rows = []
+        for ep in chunk:
+            s_val = (ep.get("metadata") or {}).get("season")
+            std_name = format_standardized_title(
+                ep.get("name") or "Bez názvu", s_val
+            )
+            if len(std_name) > 34:
+                std_name = std_name[:31] + "..."
+
+            card_avail = (
+                (ep.get("metadata") or {})
+                .get("cardLabels", {})
+                .get("topLeft")
+            )
+            if card_avail:
+                avail = card_avail.replace("\xa0", " ")
+            else:
+                avail = "Dostupné" if self._is_playable(ep) else "Vypršelo"
+
+            bcast = "-"
+            b_at = ep.get("broadcast_at")
+            if b_at:
+                if isinstance(b_at, str):
+                    bcast = b_at[:10]
+                elif hasattr(b_at, "strftime"):
+                    bcast = b_at.strftime("%d.%m.%Y")
+
+            rows.append([std_name, avail, bcast])
+
+        table = format_ascii_table(headers, rows)
+        header_text = (
+            f"**Epizody pro pořad** <{self.canonical_url}> "
+            f"(zobrazeno {len(chunk)} z {total}):"
+        )
+        return f"{header_text}\n```text\n{table}\n```"
+
+
 @bot.tree.command(
     name="episodes", description="Zobrazí evidované epizody pro vybraný pořad"
 )
@@ -290,39 +527,10 @@ async def episodes_cmd(interaction: discord.Interaction, url: str):
         )
         return
 
-    headers = ["Epizoda", "Vysíláno", "Notifikováno"]
-    rows = []
-    ep_urls = []
-    for ep in episodes:
-        ep_urls.append(ep["url"])
-        bcast = "-"
-        if ep.get("broadcast_at"):
-            b_at = ep["broadcast_at"]
-            if isinstance(b_at, str):
-                bcast = b_at[:10]
-            elif hasattr(b_at, "strftime"):
-                bcast = b_at.strftime("%d.%m.%Y")
-        notified = "Ano" if ep.get("last_notified_at") else "Ne"
-        name = ep.get("name") or "Bez názvu"
-        if len(name) > 35:
-            name = name[:32] + "..."
-        rows.append([name, bcast, notified])
-
-    table = format_ascii_table(headers, rows)
-    content = f"**Epizody pro pořad** <{canonical_url}> ({len(episodes)}):\n```text\n{table}\n```"
-    view = DownloadAllView(ep_urls=ep_urls) if ep_urls else None
-
-    if len(content) <= 2000:
-        await interaction.response.send_message(content, view=view)
-    else:
-        # If table exceeds Discord 2000-char message limit, display top 15 + note
-        short_rows = rows[:15]
-        short_table = format_ascii_table(headers, short_rows)
-        short_content = (
-            f"**Epizody pro pořad** <{canonical_url}> (zobrazeno 15 z {len(episodes)}):\n"
-            f"```text\n{short_table}\n```"
-        )
-        await interaction.response.send_message(short_content, view=view)
+    view = EpisodesView(canonical_url=canonical_url, episodes=episodes)
+    await interaction.response.send_message(
+        content=view.get_content(), view=view
+    )
 
 
 @bot.tree.command(
@@ -332,20 +540,55 @@ async def download_cmd(interaction: discord.Interaction, url: str):
     try:
         assert_allowed_url(url)
     except Exception as e:
-        await interaction.response.send_message(f"Neplatná URL adresa: {e}")
+        await interaction.response.send_message(
+            f"Neplatná URL adresa: {e}", ephemeral=True
+        )
         return
 
-    await interaction.response.defer()
+    start_time = datetime.now()
+    embed = discord.Embed(
+        title="Stahování epizody",
+        color=3447003,  # Blue
+    )
+    embed.add_field(name="URL", value=f"<{url}>", inline=False)
+    embed.add_field(name="Stav", value="Probíhá stahování...", inline=True)
+    embed.add_field(
+        name="Cílové úložiště", value=f"`{CONFIG.DOWNLOAD_DIR}`", inline=True
+    )
+    embed.add_field(
+        name="Zahájeno",
+        value=f"{format_discord_timestamp(start_time, 'T')} ({format_discord_timestamp(start_time, 'R')})",
+        inline=False,
+    )
+    await interaction.response.send_message(embed=embed)
+
     logger.info(f"Ad-hoc download requested via Discord for: {url}")
     _, success, err = await download_one(url, logger)
+    elapsed = (datetime.now() - start_time).total_seconds()
+
     if success:
-        await interaction.followup.send(
-            f"Stahování dokončeno úspěšně:\n{url}"
+        embed.color = 3066993  # Green
+        embed.set_field_at(1, name="Stav", value="Dokončeno", inline=True)
+        embed.add_field(
+            name="Doba stahování", value=f"{elapsed:.1f} s", inline=True
         )
+        embed.add_field(
+            name="Dokončeno",
+            value=f"{format_discord_timestamp(datetime.now(), 'T')}",
+            inline=False,
+        )
+        await interaction.edit_original_response(embed=embed)
     else:
-        await interaction.followup.send(
-            f"Stahování selhalo:\n{url}\nChyba: {err[:500]}"
+        embed.color = 15158332  # Red
+        embed.set_field_at(1, name="Stav", value="Selhalo", inline=True)
+        embed.add_field(name="Doba běhu", value=f"{elapsed:.1f} s", inline=True)
+        err_snippet = err[:500] if err else "Neznámá chyba při stahování."
+        embed.add_field(
+            name="Chyba",
+            value=f"```text\n{err_snippet}\n```",
+            inline=False,
         )
+        await interaction.edit_original_response(embed=embed)
 
 
 @bot.tree.command(
