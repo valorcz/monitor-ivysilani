@@ -91,6 +91,12 @@ def test_episodes_view_pagination_and_playability():
         assert "S01E01 - Epizoda 1" in all_content
         assert "Vypršelo" in all_content
 
+        # Test embed structure
+        embed = view.get_embed()
+        assert embed.title == "Seznam epizod"
+        assert "-#" in embed.description
+        assert "S01E01 - Epizoda 1" in embed.description
+
         # Edge cases: old record without playable flag or with rights restricted
         old_ep = {"metadata": {}}
         assert EpisodesView._is_playable(old_ep) is False

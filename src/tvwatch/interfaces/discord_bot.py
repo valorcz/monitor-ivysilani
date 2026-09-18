@@ -15,7 +15,6 @@ from tvwatch.core.logging import setup_logger
 from tvwatch.core.net import assert_allowed_url
 from tvwatch.core.scraper import sync_all_concurrent, sync_one_show
 from tvwatch.core.utils import (
-    format_ascii_table,
     format_discord_timestamp,
     format_standardized_title,
     normalize_show_url,
@@ -248,31 +247,32 @@ async def list_cmd(interaction: discord.Interaction):
     db_path = guild_db_path(interaction.guild_id)
     with DuckRepo(db_path) as repo:
         shows = repo.list_shows(active=None)
+        active_shows_meta = {
+            s["url"]: s.get("metadata") or {} for s in repo.get_active_shows()
+        }
     if not shows:
         await interaction.response.send_message(
-            "Žádné evidované pořady v databázi."
+            "Žádné evidované pořady v databázi.", ephemeral=True
         )
         return
 
-    headers = ["Pořad", "Stav"]
-    rows = [
-        [
-            u.split("/porady/")[1].rstrip("/")
-            if "/porady/" in u
-            else u[:35],
-            "Aktivní" if active else "Pozastaveno",
-        ]
-        for u, active in shows
-    ]
-    table = format_ascii_table(headers, rows)
-    msg = f"**Evidované pořady:**\n```text\n{table}\n```"
-    if len(msg) > 2000:
-        lines = [
-            f"• {u} ({'Aktivní' if active else 'Pozastaveno'})"
-            for u, active in shows
-        ]
-        msg = "**Evidované pořady:**\n" + "\n".join(lines)
-    await interaction.response.send_message(msg)
+    embed = discord.Embed(
+        title="Evidované pořady",
+        description=f"Celkem evidováno: **{len(shows)}** pořad(ů)\n\n",
+        color=0x2B2D31,
+    )
+
+    lines = []
+    for u, active in shows:
+        meta = active_shows_meta.get(u) or {}
+        show_name = meta.get("name") or (
+            u.split("/porady/")[1].rstrip("/") if "/porady/" in u else u
+        )
+        status_text = "Aktivní sledování" if active else "Pozastaveno"
+        lines.append(f"[**{show_name}**](<{u}>)\n-# Stav: {status_text}")
+
+    embed.description += "\n\n".join(lines)
+    await interaction.response.send_message(embed=embed)
 
 
 class EpisodesView(discord.ui.View):
@@ -426,7 +426,7 @@ class EpisodesView(discord.ui.View):
         self.page = 0
         self._build_components()
         await interaction.response.edit_message(
-            content=self.get_content(), view=self
+            embed=self.get_embed(), view=self
         )
 
     async def _on_prev(self, interaction: discord.Interaction):
@@ -434,14 +434,14 @@ class EpisodesView(discord.ui.View):
             self.page -= 1
         self._build_components()
         await interaction.response.edit_message(
-            content=self.get_content(), view=self
+            embed=self.get_embed(), view=self
         )
 
     async def _on_next(self, interaction: discord.Interaction):
         self.page += 1
         self._build_components()
         await interaction.response.edit_message(
-            content=self.get_content(), view=self
+            embed=self.get_embed(), view=self
         )
 
     async def _on_download(self, interaction: discord.Interaction):
@@ -471,23 +471,44 @@ class EpisodesView(discord.ui.View):
             dl_buttons[0].style = discord.ButtonStyle.success
         await interaction.edit_original_response(view=self)
 
-    def get_content(self) -> str:
+    def get_embed(self) -> discord.Embed:
         filtered = self._get_filtered_episodes()
         total = len(filtered)
         start = self.page * self.per_page
         end = start + self.per_page
         chunk = filtered[start:end]
 
-        headers = ["Epizoda", "Dostupnost", "Vysíláno"]
-        rows = []
+        filter_label = (
+            "Pouze dostupné"
+            if self.current_filter == "playable"
+            else (
+                "Všechny epizody"
+                if self.current_filter == "all"
+                else self.current_filter
+            )
+        )
+
+        embed = discord.Embed(
+            title="Seznam epizod",
+            color=0x2B2D31,
+        )
+        embed.description = (
+            f"**Pořad:** <{self.canonical_url}>\n"
+            f"**Filtr:** {filter_label} (zobrazeno {len(chunk)} z {total})\n\n"
+        )
+
+        if not chunk:
+            embed.description += "*Žádné epizody neodpovídají zvolenému filtru.*"
+            return embed
+
+        lines = []
         for ep in chunk:
             s_val = (ep.get("metadata") or {}).get("season")
             idec_val = ep.get("idec")
             std_name = format_standardized_title(
                 ep.get("name") or "Bez názvu", s_val, idec=idec_val
             )
-            if len(std_name) > 34:
-                std_name = std_name[:31] + "..."
+            ep_url = ep.get("url") or self.canonical_url
 
             card_avail = (
                 (ep.get("metadata") or {})
@@ -511,14 +532,19 @@ class EpisodesView(discord.ui.View):
                 elif hasattr(b_at, "strftime"):
                     bcast = b_at.strftime("%d.%m.%Y")
 
-            rows.append([std_name, avail, bcast])
+            lines.append(
+                f"[**{std_name}**](<{ep_url}>)\n-# {avail} • Vysíláno: {bcast}"
+            )
 
-        table = format_ascii_table(headers, rows)
-        header_text = (
-            f"**Epizody pro pořad** <{self.canonical_url}> "
-            f"(zobrazeno {len(chunk)} z {total}):"
-        )
-        return f"{header_text}\n```text\n{table}\n```"
+        embed.description += "\n\n".join(lines)
+        if total > self.per_page:
+            total_pages = (total + self.per_page - 1) // self.per_page
+            embed.set_footer(text=f"Stránka {self.page + 1} z {total_pages}")
+
+        return embed
+
+    def get_content(self) -> str:
+        return self.get_embed().description or ""
 
 
 @bot.tree.command(
@@ -539,7 +565,7 @@ async def episodes_cmd(interaction: discord.Interaction, url: str):
 
     view = EpisodesView(canonical_url=canonical_url, episodes=episodes)
     await interaction.response.send_message(
-        content=view.get_content(), view=view
+        embed=view.get_embed(), view=view
     )
 
 
@@ -609,19 +635,36 @@ async def status_cmd(interaction: discord.Interaction):
     with DuckRepo(db_path) as repo:
         stats = repo.get_stats()
 
-    headers = ["Metrika", "Hodnota"]
-    rows = [
-        ["Aktivní pořady", str(stats["active_shows"])],
-        ["Pozastavené pořady", str(stats["inactive_shows"])],
-        ["Celkem evidováno pořadů", str(stats["total_shows"])],
-        ["Celkem evidováno epizod", str(stats["total_episodes"])],
-        ["Z toho notifikováno", str(stats["notified_episodes"])],
-        ["Využití úložiště", get_download_dir_size()],
-    ]
-    table = format_ascii_table(headers, rows)
-    await interaction.response.send_message(
-        f"**Statistiky systému:**\n```text\n{table}\n```"
+    embed = discord.Embed(
+        title="Statistiky systému",
+        color=0x2B2D31,
     )
+    embed.add_field(
+        name="Pořady",
+        value=(
+            f"• Aktivní: **{stats['active_shows']}**\n"
+            f"• Pozastavené: **{stats['inactive_shows']}**\n"
+            f"• Celkem: **{stats['total_shows']}**"
+        ),
+        inline=True,
+    )
+    embed.add_field(
+        name="Epizody",
+        value=(
+            f"• Celkem evidováno: **{stats['total_episodes']}**\n"
+            f"• Notifikováno: **{stats['notified_episodes']}**"
+        ),
+        inline=True,
+    )
+    embed.add_field(
+        name="Úložiště",
+        value=(
+            f"• Využití: **{get_download_dir_size()}**\n"
+            f"• Složka: `{CONFIG.DOWNLOAD_DIR}`"
+        ),
+        inline=False,
+    )
+    await interaction.response.send_message(embed=embed)
 
 
 @bot.tree.command(name="sync", description="Okamžitě zkontroluje nové epizody")

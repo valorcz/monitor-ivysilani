@@ -60,6 +60,9 @@ docker-down:
 docker-restart:
 	docker compose restart
 
+docker-rebuild:
+	docker compose up -d --build && docker compose logs -f
+
 docker-logs:
 	docker compose logs -f
 
