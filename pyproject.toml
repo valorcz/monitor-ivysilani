@@ -14,8 +14,8 @@ dependencies = [
   "discord.py>=2",
   "cssselect>=1.4.0",
   "pytest>=9.0.2",
+  "pytz>=2024.1",
 ]
-
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -32,6 +32,9 @@ dev = [
     "ruff>=0.15.4",
     "yt-dlp>=2026.2.21"
 ]
+
+[tool.uv]
+package = true
 
 [project.scripts]
 tvwatch = "tvwatch.interfaces.cli:main"

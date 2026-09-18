@@ -16,7 +16,14 @@ class Config(BaseSettings):
     # --- Networking ---
     HTTP_TIMEOUT: int = Field(default=10)
     USER_AGENT: str = Field(
-        default="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        default="Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0"
+    )
+
+    # --- Notifications & Scraper ---
+    NOTIFICATION_COOLDOWN_DAYS: int = Field(default=30)
+    NOTIFY_ON_INITIAL_ADD: bool = Field(default=False)
+    GRAPHQL_PERSISTED_HASH: str = Field(
+        default="e627db8ae17ccfbb925f298f9d6ba46d80f65fcea7c7d824a87457400a6c3035"
     )
 
     # --- Allowed URL pattern (ČT only) ---

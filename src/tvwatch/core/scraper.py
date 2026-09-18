@@ -1,17 +1,42 @@
 import asyncio
-from typing import List, Dict, Any, Optional
 import json
-from lxml import html
+import logging
+import re
+from typing import Any, Dict, List, Optional
+from datetime import datetime
 import requests
-from .net import robust_get
-from .models import TVSeries, Episode, SyncResult
+from lxml import html
+
+from .config import CONFIG
 from .db import DuckRepo
-from .utils import redact_url_query
+from .models import Episode, SyncResult, TVSeries
+from .utils import (
+    canonical_episode_url,
+    extract_episode_id,
+    normalize_show_url,
+    redact_url_query,
+)
+
+logger = logging.getLogger(__name__)
 
 
-def _extract_schema_data(content: bytes) -> Dict[str, Optional[Dict[str, Any]]]:
+def extract_show_id(url: str) -> str:
+    """Extracts the show ID (sidp) from the iVysilani URL."""
+    match = re.search(r"/porady/(\d+)", url)
+    if not match:
+        raise ValueError(f"Could not extract show ID from URL: {url}")
+    return match.group(1)
+
+
+def _extract_schema_data(content: bytes | str) -> Dict[str, Optional[Dict[str, Any]]]:
+    """
+    Parses JSON-LD schema objects (TVSeries and ItemList) for backward compatibility
+    and fallback SSR scraping.
+    """
+    if isinstance(content, str):
+        content = content.encode("utf-8")
     tree = html.fromstring(content)
-    script_elements = tree.cssselect("div#__next script")
+    script_elements = tree.cssselect("script[type='application/ld+json']")
     tv_series_data, item_list_data = None, None
 
     for script in script_elements:
@@ -23,119 +48,386 @@ def _extract_schema_data(content: bytes) -> Dict[str, Optional[Dict[str, Any]]]:
             continue
         items = data if isinstance(data, list) else [data]
         for item in items:
-            if isinstance(item, dict) and item.get("@context") == "https://schema.org":
-                if item.get("@type") == "TVSeries":
+            if isinstance(item, dict):
+                item_type = item.get("@type", "")
+                if "TVSeries" in item_type or item_type == "TVSeries":
                     tv_series_data = item
-                elif item.get("@type") == "ItemList":
+                elif "ItemList" in item_type or item_type == "ItemList":
                     item_list_data = item
 
     return {"series": tv_series_data, "list": item_list_data}
 
 
-def sync_one_show(url: str, repo: DuckRepo, logger) -> Optional[SyncResult]:
+def extract_next_data(html_content: str) -> Dict[str, Any]:
+    """
+    Extracts the __NEXT_DATA__ JSON script from page HTML.
+    """
     try:
-        resp = robust_get(url)
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Failed to fetch {redact_url_query(url)} after retries: {e}")
-        return None
+        tree = html.fromstring(html_content)
+        script_elements = tree.cssselect("script#__NEXT_DATA__")
+        if script_elements and script_elements[0].text:
+            return json.loads(script_elements[0].text)
+    except Exception as e:
+        logger.debug(f"Failed to parse __NEXT_DATA__: {e}")
+    return {}
 
-    data = _extract_schema_data(resp.content)
-    tv_series_meta = data["series"] or {}
-    item_list = data["list"] or {}
 
-    # TV series model (url + optional name/metadata)
-    series = TVSeries(url=url, name=tv_series_meta.get("name"), metadata=tv_series_meta)
-    if tv_series_meta:
-        repo.update_show_metadata(url, tv_series_meta)
+def extract_show_idec(next_data: Dict[str, Any]) -> Optional[str]:
+    """
+    Extracts the 15-digit internal show IDEC from __NEXT_DATA__.
+    """
+    props = next_data.get("props", {})
+    show_obj = props.get("pageProps", {}).get("data", {}).get("show", {})
+    idec = show_obj.get("idec")
+    if idec:
+        return str(idec)
 
-    # Episodes → Pydantic validation & normalization
-    new_eps: List[Episode] = []
+    # Search in apolloState
+    apollo = props.get("apolloState", {})
+    for key, value in apollo.items():
+        if isinstance(value, dict) and value.get("__typename") == "Show":
+            if "idec" in value and value["idec"]:
+                return str(value["idec"])
+
+    return None
+
+
+def fetch_dynamic_graphql_hash(
+    session: requests.Session, show_url: str, operation_name: str = "GetEpisodes"
+) -> str:
+    """
+    Scrapes Next.js JS chunks to extract current Apollo Persisted Query SHA-256 hash.
+    Falls back to CONFIG.GRAPHQL_PERSISTED_HASH on failure.
+    """
+    dily_url = f"{show_url.rstrip('/')}/dily/"
+    headers = {"User-Agent": CONFIG.USER_AGENT}
+
+    try:
+        response = session.get(dily_url, headers=headers, timeout=CONFIG.HTTP_TIMEOUT)
+        if response.ok:
+            tree = html.fromstring(response.content)
+            script_urls = [
+                s.get("src") for s in tree.cssselect("script[src]") if s.get("src")
+            ]
+
+            for s_url in script_urls:
+                if not s_url.endswith(".js"):
+                    continue
+                try:
+                    js_content = session.get(
+                        s_url, headers=headers, timeout=CONFIG.HTTP_TIMEOUT
+                    ).text
+                except Exception:
+                    continue
+
+                if operation_name in js_content:
+                    op_index = js_content.find(operation_name)
+                    hash_matches = [
+                        (m.group(1), m.start())
+                        for m in re.finditer(r'["\']([a-f0-9]{64})["\']', js_content)
+                    ]
+                    if hash_matches:
+                        hash_matches.sort(key=lambda x: abs(x[1] - op_index))
+                        best_hash = hash_matches[0][0]
+                        logger.debug(f"Found dynamic hash {best_hash} in {s_url}")
+                        return best_hash
+
+    except Exception as e:
+        logger.debug(f"Error resolving dynamic hash: {e}")
+
+    logger.debug(f"Using fallback persisted query hash for {operation_name}")
+    return CONFIG.GRAPHQL_PERSISTED_HASH
+
+
+def fetch_all_episodes(
+    session: requests.Session, show_idec: str, query_hash: str
+) -> list[dict]:
+    """
+    Fetches all playable episodes via the GraphQL API using the persisted query hash.
+    Paginates automatically until all playable episodes are returned.
+    """
+    base_url = "https://api.ceskatelevize.cz/graphql/"
+    limit = 50
+    offset = 0
+    all_episodes = []
+
+    headers = {
+        "User-Agent": CONFIG.USER_AGENT,
+        "Accept": "application/json",
+    }
+
+    while True:
+        variables = {
+            "limit": limit,
+            "offset": offset,
+            "idec": show_idec,
+            "orderBy": "oldest",
+            "onlyPlayable": True,
+        }
+
+        extensions = {"persistedQuery": {"version": 1, "sha256Hash": query_hash}}
+
+        params = {
+            "operationName": "GetEpisodes",
+            "variables": json.dumps(variables),
+            "extensions": json.dumps(extensions),
+        }
+
+        try:
+            response = session.get(
+                base_url, params=params, headers=headers, timeout=CONFIG.HTTP_TIMEOUT
+            )
+            response.raise_for_status()
+            data = response.json()
+        except Exception as e:
+            logger.warning(
+                f"GraphQL query failed at offset {offset} for show IDEC {show_idec}: {e}"
+            )
+            break
+
+        episodes_data = data.get("data", {}).get("episodesPreviewFind", {})
+        items = episodes_data.get("items", [])
+        total_count = episodes_data.get("totalCount", 0)
+
+        if not items:
+            break
+
+        all_episodes.extend(items)
+        offset += len(items)
+        if offset >= total_count:
+            break
+
+    logger.info(f"Fetched {len(all_episodes)} playable episode(s) via GraphQL.")
+    return all_episodes
+
+
+def fallback_extract_episodes(
+    next_data: Dict[str, Any], html_content: str, canonical_show_url: str
+) -> list[dict]:
+    """
+    Fallback extraction from Next.js apolloState and JSON-LD when GraphQL API is unavailable.
+    """
+    episodes = []
+    seen_ids = set()
+
+    # 1. From Next.js apolloState
+    apollo = next_data.get("props", {}).get("apolloState", {})
+    for key, val in apollo.items():
+        if isinstance(val, dict) and val.get("__typename") == "EpisodePreview":
+            ep_id = val.get("id")
+            if ep_id and ep_id not in seen_ids:
+                seen_ids.add(ep_id)
+                episodes.append(val)
+
+    # 2. From JSON-LD ItemList
+    schema = _extract_schema_data(html_content)
+    item_list = schema.get("list") or {}
     for el in item_list.get("itemListElement", []):
         raw = el.get("item", el).copy()
-        ep_url = el.get("url") or raw.get("url")
-        ep_name = raw.get("name") or el.get("name")
-        if not ep_url:
-            continue
-        raw["url"] = ep_url
-        if "position" in el:
-            raw["position"] = el["position"]
+        raw_url = el.get("url") or raw.get("url", "")
+        ep_id = extract_episode_id(raw_url)
+        if ep_id and ep_id not in seen_ids:
+            seen_ids.add(ep_id)
+            episodes.append(
+                {
+                    "id": ep_id,
+                    "title": raw.get("name") or el.get("name", "Unknown Title"),
+                    "playable": True,
+                    "url": raw_url,
+                }
+            )
 
-        # validate with Pydantic (enforces https + allowlist)
+    return episodes
+
+
+def sync_one_show(
+    show_url: str,
+    repo: DuckRepo,
+    logger=None,
+    backfill: bool = False,
+) -> Optional[SyncResult]:
+    """
+    Main sync pipeline for a single show.
+    Fetches show metadata, all playable episodes, updates DuckDB,
+    and returns a SyncResult containing new episodes eligible for notification.
+    """
+    log = logger or logging.getLogger(__name__)
+    canonical_url = normalize_show_url(show_url)
+    log.info(f"Syncing show: {redact_url_query(canonical_url)}")
+
+    session = requests.Session()
+    headers = {
+        "User-Agent": CONFIG.USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+
+    try:
+        resp = session.get(canonical_url, headers=headers, timeout=CONFIG.HTTP_TIMEOUT)
+        resp.raise_for_status()
+        html_content = resp.text
+    except Exception as e:
+        log.error(f"Failed to fetch show page {redact_url_query(canonical_url)}: {e}")
+        return None
+
+    # Parse metadata & show IDEC
+    next_data = extract_next_data(html_content)
+    show_idec = extract_show_idec(next_data)
+
+    schema_data = _extract_schema_data(html_content)
+    tv_series_meta = schema_data.get("series") or {}
+
+    show_title = None
+    if next_data:
+        show_obj = (
+            next_data.get("props", {})
+            .get("pageProps", {})
+            .get("data", {})
+            .get("show", {})
+        )
+        show_title = show_obj.get("title")
+
+    if not show_title:
+        show_title = tv_series_meta.get("name")
+
+    series = TVSeries(
+        url=canonical_url,
+        name=show_title,
+        metadata=tv_series_meta or {"name": show_title},
+    )
+
+    # Persist show in repository
+    repo.insert_show(canonical_url, metadata=tv_series_meta or {"name": show_title})
+
+    # Fetch episodes
+    episodes_raw = []
+    if show_idec:
+        query_hash = fetch_dynamic_graphql_hash(session, canonical_url)
+        episodes_raw = fetch_all_episodes(session, show_idec, query_hash)
+
+    if not episodes_raw:
+        log.debug(f"Falling back to SSR/JSON-LD episode extraction for {canonical_url}")
+        episodes_raw = fallback_extract_episodes(next_data, html_content, canonical_url)
+
+    # Upsert episodes and identify new ones for notification
+    new_episodes: List[Episode] = []
+    for ep in episodes_raw:
+        ep_id = ep.get("id") or extract_episode_id(ep.get("url", ""))
+        if not ep_id:
+            continue
+
+        ep_url = canonical_episode_url(canonical_url, ep_id)
+        ep_name = ep.get("title") or ep.get("name", "Unknown Title")
+
+        broadcast_at = None
+        date_info = ep.get("date")
+        if isinstance(date_info, dict) and date_info.get("datetime"):
+            try:
+                broadcast_at = datetime.fromisoformat(
+                    date_info["datetime"].replace("Z", "+00:00")
+                )
+            except Exception:
+                pass
+
+        # Record in DuckDB
+        should_notify = repo.record_episode(
+            show_url=canonical_url,
+            url=ep_url,
+            name=ep_name,
+            metadata=ep,
+            idec=ep_id,
+            broadcast_at=broadcast_at,
+            backfill=backfill,
+        )
+
         try:
-            ep = Episode(
-                url=raw["url"], name=ep_name, metadata=raw, position=raw.get("position")
+            episode_model = Episode(
+                url=ep_url,
+                name=ep_name,
+                idec=ep_id,
+                metadata=ep,
             )
         except Exception as ex:
-            logger.warning(
-                f"Skipping invalid episode under {redact_url_query(url)}: {ex}"
-            )
+            log.warning(f"Validation error for episode {ep_url}: {ex}")
             continue
 
-        if repo.insert_new_episode(show_url=url, name=ep.name, metadata=ep.metadata):
-            new_eps.append(ep)
+        if should_notify:
+            new_episodes.append(episode_model)
 
-    if not tv_series_meta and not new_eps:
-        logger.debug(f"No metadata or new episodes found for {redact_url_query(url)}")
+    if new_episodes:
+        log.info(
+            f"Detected {len(new_episodes)} new/notifiable episode(s) for {redact_url_query(canonical_url)}"
+        )
+    else:
+        log.debug(f"No new episodes for {redact_url_query(canonical_url)}")
 
-    return SyncResult(source_url=url, tv_series=series, new_episodes=new_eps)
+    return SyncResult(
+        source_url=canonical_url, tv_series=series, new_episodes=new_episodes
+    )
 
 
-def sync_all(repo: DuckRepo, logger) -> List[SyncResult]:
+def sync_all(repo: DuckRepo, logger=None, backfill: bool = False) -> List[SyncResult]:
+    """
+    Synchronously syncs all active shows in the repository.
+    """
+    log = logger or logging.getLogger(__name__)
     results: List[SyncResult] = []
     active_urls = repo.get_active_urls()
+
     if not active_urls:
-        logger.info("No active shows to sync. Use 'add' to start tracking.")
+        log.info("No active shows to sync.")
         return results
 
     for url in active_urls:
-        logger.info(f"Syncing: {redact_url_query(url)}")
-        r = sync_one_show(url, repo, logger)
-        if r and r.new_episodes:
-            logger.info(
-                f"Detected {len(r.new_episodes)} new episode(s) for {redact_url_query(url)}"
-            )
-            results.append(r)
+        res = sync_one_show(url, repo, logger=log, backfill=backfill)
+        if res and res.new_episodes:
+            results.append(res)
+
     return results
 
 
 async def sync_all_concurrent(
-    repo: DuckRepo, logger, max_concurrency: int = 4
+    target: Any,
+    second_arg: Any = None,
+    max_concurrency: int = 4,
+    logger=None,
+    backfill: bool = False,
 ) -> List[SyncResult]:
     """
-    Run sync_one_show concurrently with a maximum concurrency limit.
-    Uses asyncio.to_thread so sync_one_show can remain synchronous.
+    Runs sync_one_show concurrently using asyncio.to_thread with a semaphore.
+    Supports both signatures:
+      - sync_all_concurrent(repo: DuckRepo, logger=None, max_concurrency=4)
+      - sync_all_concurrent(urls: list[str], repo: DuckRepo)
     """
+    log = logger or logging.getLogger(__name__)
+
+    if isinstance(target, list):
+        urls = target
+        repo = second_arg
+    else:
+        repo = target
+        if second_arg and not isinstance(second_arg, (int, float)):
+            log = second_arg
+        urls = repo.get_active_urls()
+
+    if not urls:
+        log.info("No active shows to sync.")
+        return []
 
     semaphore = asyncio.Semaphore(max_concurrency)
-    results: List[SyncResult] = []
 
-    async def run_for_url(url: str):
+    async def run_for_url(url: str) -> Optional[SyncResult]:
         async with semaphore:
-            logger.info("Starting sync: %s", url)
-            # run sync_one_show in a worker thread
-            result = await asyncio.to_thread(sync_one_show, url, repo, logger)
-            if result and result.new_episodes:
-                logger.info(
-                    "Finished sync: %s -> new episodes: %d",
-                    url,
-                    len(result.new_episodes),
-                )
-            return result
+            return await asyncio.to_thread(sync_one_show, url, repo, log, backfill)
 
-    active_urls = repo.get_active_urls()
-    if not active_urls:
-        logger.info("No active shows to sync.")
-        return results
+    tasks = [asyncio.create_task(run_for_url(u)) for u in urls]
+    finished = await asyncio.gather(*tasks, return_exceptions=True)
 
-    tasks = [asyncio.create_task(run_for_url(url)) for url in active_urls]
-    finished = await asyncio.gather(*tasks, return_exceptions=False)
-
-    results = []
+    results: List[SyncResult] = []
     for item in finished:
         if isinstance(item, Exception):
-            logger.error("Error during sync: %s", item)
+            log.error(f"Error during sync: {item}")
             continue
-        results.append(item)
+        if item and item.new_episodes:
+            results.append(item)
+
     return results
-    # Filter out None results
-    # return [r for r in finished if r]

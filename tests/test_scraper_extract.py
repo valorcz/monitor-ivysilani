@@ -18,9 +18,7 @@ def test_extracts_series_and_items_from_jsonld():
        ]}
       </script>
     </div>
-    """.encode(
-        "utf-8"
-    )
+    """.encode("utf-8")
     data = _extract_schema_data(html)
     assert data["series"]["name"] == "Test Serial"
     assert len(data["list"]["itemListElement"]) == 2

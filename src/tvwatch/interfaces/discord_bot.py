@@ -11,7 +11,7 @@ from tvwatch.core.config import CONFIG
 from tvwatch.core.db import DuckRepo
 from tvwatch.core.downloader import download_many
 from tvwatch.core.logging import setup_logger
-from tvwatch.core.scraper import sync_all, sync_all_concurrent
+from tvwatch.core.scraper import sync_all_concurrent, sync_one_show
 
 logger = setup_logger("DiscordBot")
 
@@ -52,13 +52,15 @@ class DownloadAllView(discord.ui.View):
         await interaction.edit_original_response(view=self)
 
 
-async def dispatch_notifications(new_data: list, target):
+async def dispatch_notifications(new_data: list, target, repo: DuckRepo | None = None):
+    all_notified_urls = []
     for show in new_data:
         show_name = show.get("tv_series", {}).get("name", "Neznámý seriál")
         episodes = show.get("new_episodes", [])
         if not episodes:
             continue
         ep_urls = [ep.get("url") for ep in episodes if ep.get("url")]
+        all_notified_urls.extend(ep_urls)
         embed = discord.Embed(title=f"📺 {show_name}", color=5814783)
         if episodes and "image" in episodes[0]:
             embed.set_thumbnail(url=episodes[0]["image"])
@@ -70,6 +72,9 @@ async def dispatch_notifications(new_data: list, target):
         embed.description = "\n".join(lines)
         view = DownloadAllView(ep_urls=ep_urls)
         await target.send(embed=embed, view=view)
+
+    if repo and all_notified_urls:
+        repo.mark_episodes_notified(all_notified_urls)
 
 
 class TVScraperBot(commands.Bot):
@@ -104,11 +109,10 @@ class TVScraperBot(commands.Bot):
                         f"Guild {guild_id}: cannot access channel {channel_id_str}"
                     )
                     continue
-                # new = await asyncio.to_thread(sync_all, repo, logger)
                 new = await sync_all_concurrent(repo, logger, max_concurrency=4)
                 if new:
                     payload = [r.to_payload() for r in new]
-                    await dispatch_notifications(payload, target=channel)
+                    await dispatch_notifications(payload, target=channel, repo=repo)
 
     @sync_loop.before_loop
     async def before_sync_loop(self):
@@ -144,8 +148,14 @@ async def set_channel_cmd(interaction: discord.Interaction):
 async def add_cmd(interaction: discord.Interaction, url: str):
     db_path = guild_db_path(interaction.guild_id)
     with DuckRepo(db_path) as repo:
-        repo.add_or_reactivate_show(url)
-    await interaction.response.send_message(f"✅ Přidáno ke sledování:\n{url}")
+        canonical_url = repo.add_or_reactivate_show(url)
+        if not CONFIG.NOTIFY_ON_INITIAL_ADD:
+            await asyncio.to_thread(
+                sync_one_show, canonical_url, repo, logger, backfill=True
+            )
+    await interaction.response.send_message(
+        f"✅ Přidáno ke sledování:\n{canonical_url}"
+    )
 
 
 @bot.tree.command(name="disable", description="Přestane seriál sledovat")
@@ -181,12 +191,14 @@ async def sync_cmd(interaction: discord.Interaction):
     await interaction.response.defer()
     db_path = guild_db_path(interaction.guild_id)
     with DuckRepo(db_path) as repo:
-        new = await asyncio.to_thread(sync_all, repo, logger)
-    if not new:
-        await interaction.followup.send("✅ Kontrola dokončena. Žádné nové epizody.")
-        return
-    payload = [r.to_payload() for r in new]
-    await dispatch_notifications(payload, target=interaction.followup)
+        new = await sync_all_concurrent(repo, logger, max_concurrency=4)
+        if not new:
+            await interaction.followup.send(
+                "✅ Kontrola dokončena. Žádné nové epizody."
+            )
+            return
+        payload = [r.to_payload() for r in new]
+        await dispatch_notifications(payload, target=interaction.followup, repo=repo)
 
 
 def main():
