@@ -87,18 +87,44 @@ tvwatch list --all
 tvwatch list --json
 ```
 
-### Disabling a Show
+### Disabling or Removing a Show
 ```bash
+# Pause tracking
 tvwatch disable "https://www.ceskatelevize.cz/porady/16560311257-tobias-lolness/"
+
+# Permanently delete a show and its history
+tvwatch remove "https://www.ceskatelevize.cz/porady/16560311257-tobias-lolness/"
+```
+
+### Viewing Episodes
+```bash
+# View tracked episodes formatted in a table
+tvwatch episodes "https://www.ceskatelevize.cz/porady/16560311257-tobias-lolness/"
+
+# Only show playable (available to stream/download) episodes
+tvwatch episodes "https://www.ceskatelevize.cz/porady/16560311257-tobias-lolness/" --playable
+
+# Output in JSON format
+tvwatch episodes "https://www.ceskatelevize.cz/porady/16560311257-tobias-lolness/" --json
 ```
 
 ### Checking and Syncing Episodes
 ```bash
-# Check active shows and output newly discovered episodes as JSON
+# Check active shows with live spinner and display discovered episodes
 tvwatch sync
 
 # Check active shows and automatically download newly discovered episodes
 tvwatch sync --download
+
+# Output raw JSON payload
+tvwatch sync --json
+```
+
+### System Status & Storage
+```bash
+tvwatch status
+# or
+tvwatch status --json
 ```
 
 ### Manual Episode Download

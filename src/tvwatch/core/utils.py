@@ -161,6 +161,11 @@ def parse_episode_title_and_number(title: str) -> tuple[int | None, str]:
     if re.match(r"^S\d+(?:E\d+)?(?:\s*-\s*.*)?$", clean, re.IGNORECASE):
         return None, clean
 
+    # 'E10 - Title' or 'E10'
+    m_ep = re.match(r"^E(\d+)(?:[\s:\-–—]+(.*))?$", clean, re.IGNORECASE)
+    if m_ep:
+        return int(m_ep.group(1)), (m_ep.group(2) or "").strip()
+
     # '10/26 Title' or '10/26'
     m = re.match(r"^(\d+)/\d+(?:[\s:\-–—]+(.*))?$", clean)
     if m:
@@ -289,3 +294,40 @@ def format_discord_timestamp(dt: datetime | float, style: str = "R") -> str:
     else:
         ts = int(dt)
     return f"<t:{ts}:{style}>"
+
+
+def is_playable(ep: dict) -> bool:
+    """
+    Determines if an episode is currently playable / available for download.
+    Checks cardLabels (e.g. 'nemá práva') and metadata flags 'playable' / 'isPlayable'.
+    """
+    meta = ep.get("metadata") or {}
+    card_labels = meta.get("cardLabels") or {}
+    if (
+        card_labels.get("center")
+        and "nemá práva" in str(card_labels.get("center")).lower()
+    ):
+        return False
+    if "playable" in meta:
+        return bool(meta["playable"])
+    if "isPlayable" in meta:
+        return bool(meta["isPlayable"])
+    return False
+
+
+def get_directory_size(path: str) -> str:
+    """
+    Computes total size of files inside directory in human-readable units (MB / GB).
+    """
+    import os
+
+    if not os.path.exists(path):
+        return "0 MB"
+    total_bytes = sum(
+        os.path.getsize(os.path.join(dirpath, f))
+        for dirpath, _, filenames in os.walk(path)
+        for f in filenames
+    )
+    if total_bytes > 1024**3:
+        return f"{total_bytes / (1024**3):.2f} GB"
+    return f"{total_bytes / (1024**2):.1f} MB"
