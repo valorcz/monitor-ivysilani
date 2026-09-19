@@ -30,7 +30,7 @@ class CeskaTelevizeIE(InfoExtractor):
         if playlist_description:
             playlist_description = playlist_description.replace('\xa0', ' ')
 
-        if not '/porady/' in parsed_url.path:
+        if '/porady/' not in parsed_url.path:
             raise ExtractorError('Only "porady" supported.')
 
         next_data = self._search_nextjs_data(webpage, playlist_id)

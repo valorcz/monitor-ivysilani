@@ -1,12 +1,13 @@
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 from .config import CONFIG
 
 
 class ISO8601Formatter(logging.Formatter):
     def formatTime(self, record, datefmt=None):
-        dt = datetime.fromtimestamp(record.created, timezone.utc).astimezone()
+        dt = datetime.fromtimestamp(record.created, UTC).astimezone()
         return dt.isoformat(timespec="milliseconds")
 
 

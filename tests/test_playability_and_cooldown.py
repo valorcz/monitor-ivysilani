@@ -1,6 +1,6 @@
 import os
 import tempfile
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
 from tvwatch.core.db import DuckRepo
@@ -135,7 +135,7 @@ def test_cooldown_timeout_expiration():
             )
 
             # Manually simulate time passing: set last_notified_at to 31 days ago
-            past = datetime.now(timezone.utc) - timedelta(days=31)
+            past = datetime.now(UTC) - timedelta(days=31)
             repo.conn.execute(
                 "UPDATE episodes SET last_notified_at = ? WHERE idec = ?",
                 [past, "225384613200001"],

@@ -1,11 +1,15 @@
 import asyncio
+import contextlib
 import json
 import logging
 import re
-from typing import Any, Dict, List, Optional
+import time
 from datetime import datetime
+from typing import Any
+
 import requests
 from lxml import html
+from pydantic import ValidationError
 
 from .config import CONFIG
 from .db import DuckRepo
@@ -29,7 +33,7 @@ def extract_show_id(url: str) -> str:
     return match.group(1)
 
 
-def _extract_schema_data(content: bytes | str) -> Dict[str, Optional[Dict[str, Any]]]:
+def _extract_schema_data(content: bytes | str) -> dict[str, dict[str, Any] | None]:
     """
     Parses JSON-LD schema objects (TVSeries and ItemList) for backward compatibility
     and fallback SSR scraping.
@@ -59,7 +63,7 @@ def _extract_schema_data(content: bytes | str) -> Dict[str, Optional[Dict[str, A
     return {"series": tv_series_data, "list": item_list_data}
 
 
-def extract_next_data(html_content: str) -> Dict[str, Any]:
+def extract_next_data(html_content: str) -> dict[str, Any]:
     """
     Extracts the __NEXT_DATA__ JSON script from page HTML.
     """
@@ -68,12 +72,12 @@ def extract_next_data(html_content: str) -> Dict[str, Any]:
         script_elements = tree.cssselect("script#__NEXT_DATA__")
         if script_elements and script_elements[0].text:
             return json.loads(script_elements[0].text)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.debug(f"Failed to parse __NEXT_DATA__: {e}")
     return {}
 
 
-def extract_show_idec(next_data: Dict[str, Any]) -> Optional[str]:
+def extract_show_idec(next_data: dict[str, Any]) -> str | None:
     """
     Extracts the 15-digit internal show IDEC from __NEXT_DATA__.
     """
@@ -85,21 +89,43 @@ def extract_show_idec(next_data: Dict[str, Any]) -> Optional[str]:
 
     # Search in apolloState
     apollo = props.get("apolloState", {})
-    for key, value in apollo.items():
-        if isinstance(value, dict) and value.get("__typename") == "Show":
-            if "idec" in value and value["idec"]:
-                return str(value["idec"])
+    for value in apollo.values():
+        if (
+            isinstance(value, dict)
+            and value.get("__typename") == "Show"
+            and value.get("idec")
+        ):
+            return str(value["idec"])
 
     return None
 
 
+_GRAPHQL_HASH_CACHE: dict[str, tuple[str, float]] = {}
+_HASH_CACHE_TTL_SECONDS = 43200  # 12 hours
+
+
+def clear_graphql_hash_cache() -> None:
+    """Clears the persisted query hash cache."""
+    _GRAPHQL_HASH_CACHE.clear()
+
+
 def fetch_dynamic_graphql_hash(
-    session: requests.Session, show_url: str, operation_name: str = "GetEpisodes"
+    session: requests.Session,
+    show_url: str,
+    operation_name: str = "GetEpisodes",
+    force_refresh: bool = False,
 ) -> str:
     """
     Scrapes Next.js JS chunks to extract current Apollo Persisted Query SHA-256 hash.
-    Falls back to CONFIG.GRAPHQL_PERSISTED_HASH on failure.
+    Caches resolved hash for 12 hours. Falls back to CONFIG.GRAPHQL_PERSISTED_HASH on failure.
     """
+    now = time.time()
+    if not force_refresh and operation_name in _GRAPHQL_HASH_CACHE:
+        cached_hash, cached_at = _GRAPHQL_HASH_CACHE[operation_name]
+        if now - cached_at < _HASH_CACHE_TTL_SECONDS:
+            logger.debug(f"Using cached dynamic hash for {operation_name}")
+            return cached_hash
+
     dily_url = f"{show_url.rstrip('/')}/dily/"
     headers = {"User-Agent": CONFIG.USER_AGENT}
 
@@ -118,7 +144,7 @@ def fetch_dynamic_graphql_hash(
                     js_content = session.get(
                         s_url, headers=headers, timeout=CONFIG.HTTP_TIMEOUT
                     ).text
-                except Exception:
+                except requests.RequestException:
                     continue
 
                 if operation_name in js_content:
@@ -131,12 +157,14 @@ def fetch_dynamic_graphql_hash(
                         hash_matches.sort(key=lambda x: abs(x[1] - op_index))
                         best_hash = hash_matches[0][0]
                         logger.debug(f"Found dynamic hash {best_hash} in {s_url}")
+                        _GRAPHQL_HASH_CACHE[operation_name] = (best_hash, now)
                         return best_hash
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.debug(f"Error resolving dynamic hash: {e}")
 
     logger.debug(f"Using fallback persisted query hash for {operation_name}")
+    _GRAPHQL_HASH_CACHE[operation_name] = (CONFIG.GRAPHQL_PERSISTED_HASH, now)
     return CONFIG.GRAPHQL_PERSISTED_HASH
 
 
@@ -180,10 +208,19 @@ def fetch_all_episodes(
             )
             response.raise_for_status()
             data = response.json()
-        except Exception as e:
+            if "errors" in data and any(
+                "PersistedQuery" in str(err) for err in data.get("errors", [])
+            ):
+                logger.warning(
+                    "GraphQL persisted query hash rejected by server. Invalidating cache."
+                )
+                clear_graphql_hash_cache()
+                break
+        except Exception as e:  # noqa: BLE001
             logger.warning(
                 f"GraphQL query failed at offset {offset} for show IDEC {show_idec}: {e}"
             )
+            clear_graphql_hash_cache()
             break
 
         episodes_data = data.get("data", {}).get("episodesPreviewFind", {})
@@ -203,7 +240,7 @@ def fetch_all_episodes(
 
 
 def fallback_extract_episodes(
-    next_data: Dict[str, Any], html_content: str, canonical_show_url: str
+    next_data: dict[str, Any], html_content: str, canonical_show_url: str
 ) -> list[dict]:
     """
     Fallback extraction from Next.js apolloState and JSON-LD when GraphQL API is unavailable.
@@ -213,7 +250,7 @@ def fallback_extract_episodes(
 
     # 1. From Next.js apolloState
     apollo = next_data.get("props", {}).get("apolloState", {})
-    for key, val in apollo.items():
+    for val in apollo.values():
         if isinstance(val, dict) and val.get("__typename") == "EpisodePreview":
             ep_id = val.get("id")
             if ep_id and ep_id not in seen_ids:
@@ -246,7 +283,7 @@ def sync_one_show(
     repo: DuckRepo,
     logger=None,
     backfill: bool = False,
-) -> Optional[SyncResult]:
+) -> SyncResult | None:
     """
     Main sync pipeline for a single show.
     Fetches show metadata, all playable episodes, updates DuckDB,
@@ -266,7 +303,7 @@ def sync_one_show(
         resp = session.get(canonical_url, headers=headers, timeout=CONFIG.HTTP_TIMEOUT)
         resp.raise_for_status()
         html_content = resp.text
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log.error(f"Failed to fetch show page {redact_url_query(canonical_url)}: {e}")
         return None
 
@@ -310,7 +347,7 @@ def sync_one_show(
         episodes_raw = fallback_extract_episodes(next_data, html_content, canonical_url)
 
     # Upsert episodes and identify new ones for notification
-    new_episodes: List[Episode] = []
+    new_episodes: list[Episode] = []
     active_playable_ids = set()
     for ep in episodes_raw:
         ep_id = ep.get("id") or extract_episode_id(ep.get("url", ""))
@@ -323,19 +360,13 @@ def sync_one_show(
             active_playable_ids.add(ep_id)
 
         raw_name = ep.get("title") or ep.get("name", "Unknown Title")
-        ep_name = format_standardized_title(
-            raw_name, ep.get("season"), idec=ep_id
-        )
+        ep_name = format_standardized_title(raw_name, ep.get("season"), idec=ep_id)
 
         broadcast_at = None
         date_info = ep.get("date")
         if isinstance(date_info, dict) and date_info.get("datetime"):
-            try:
-                broadcast_at = datetime.fromisoformat(
-                    date_info["datetime"].replace("Z", "+00:00")
-                )
-            except Exception:
-                pass
+            with contextlib.suppress(ValueError, TypeError):
+                broadcast_at = datetime.fromisoformat(date_info["datetime"])
 
         # Record in DuckDB
         should_notify = repo.record_episode(
@@ -355,7 +386,7 @@ def sync_one_show(
                 idec=ep_id,
                 metadata=ep,
             )
-        except Exception as ex:
+        except ValidationError as ex:
             log.warning(f"Validation error for episode {ep_url}: {ex}")
             continue
 
@@ -364,9 +395,7 @@ def sync_one_show(
 
     # Expire old episodes that are no longer playable on ČT
     if episodes_raw:
-        expired_count = repo.mark_unplayable_except(
-            canonical_url, active_playable_ids
-        )
+        expired_count = repo.mark_unplayable_except(canonical_url, active_playable_ids)
         if expired_count > 0:
             log.info(
                 f"Marked {expired_count} expired episode(s) as unplayable for {redact_url_query(canonical_url)}"
@@ -387,12 +416,12 @@ def sync_one_show(
     )
 
 
-def sync_all(repo: DuckRepo, logger=None, backfill: bool = False) -> List[SyncResult]:
+def sync_all(repo: DuckRepo, logger=None, backfill: bool = False) -> list[SyncResult]:
     """
     Synchronously syncs all active shows in the repository.
     """
     log = logger or logging.getLogger(__name__)
-    results: List[SyncResult] = []
+    results: list[SyncResult] = []
     active_urls = repo.get_active_urls()
 
     if not active_urls:
@@ -413,7 +442,7 @@ async def sync_all_concurrent(
     max_concurrency: int = 4,
     logger=None,
     backfill: bool = False,
-) -> List[SyncResult]:
+) -> list[SyncResult]:
     """
     Runs sync_one_show concurrently using asyncio.to_thread with a semaphore.
     Supports both signatures:
@@ -437,14 +466,14 @@ async def sync_all_concurrent(
 
     semaphore = asyncio.Semaphore(max_concurrency)
 
-    async def run_for_url(url: str) -> Optional[SyncResult]:
+    async def run_for_url(url: str) -> SyncResult | None:
         async with semaphore:
             return await asyncio.to_thread(sync_one_show, url, repo, log, backfill)
 
     tasks = [asyncio.create_task(run_for_url(u)) for u in urls]
     finished = await asyncio.gather(*tasks, return_exceptions=True)
 
-    results: List[SyncResult] = []
+    results: list[SyncResult] = []
     for item in finished:
         if isinstance(item, Exception):
             log.error(f"Error during sync: {item}", exc_info=item)

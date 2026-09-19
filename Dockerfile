@@ -21,7 +21,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/
 
 WORKDIR /yt-dlp
-RUN git clone --single-branch https://github.com/yt-dlp/yt-dlp.git ./
+RUN git clone --branch 2026.08.19 --depth 1 https://github.com/yt-dlp/yt-dlp.git ./
 
 # Add your patched extractor (path must match yt-dlp package layout)
 # The local file should exist at: ./yt-dlp-patch/ceskatelevize.py

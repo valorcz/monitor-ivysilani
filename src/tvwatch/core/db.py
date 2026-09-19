@@ -1,16 +1,20 @@
 from __future__ import annotations
-from typing import List, Optional, Dict, Any, Tuple
-from datetime import datetime, timezone, timedelta
+
+import contextlib
 import json
 import threading
+from datetime import UTC, datetime, timedelta
+from typing import Any, Self
+
 import duckdb
+
+from .config import CONFIG
 from .utils import (
-    normalize_show_url,
     canonical_episode_url,
     extract_episode_id,
     format_standardized_title,
+    normalize_show_url,
 )
-from .config import CONFIG
 
 
 class DuckRepo:
@@ -26,7 +30,7 @@ class DuckRepo:
         if initialize:
             self.init_schema()
 
-    def __enter__(self) -> "DuckRepo":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -68,38 +72,37 @@ class DuckRepo:
             """
             )
 
-            # Migrations for existing databases
-            for col_def in [
-                ("idec", "VARCHAR"),
-                ("last_notified_at", "TIMESTAMPTZ"),
-                ("broadcast_at", "TIMESTAMPTZ"),
-            ]:
-                try:
+            # Check if migration has already been executed
+            migrated = self.get_guild_value("schema_migrated_v1")
+            if not migrated:
+                # Migrations for existing databases
+                for col_def in [
+                    ("idec", "VARCHAR"),
+                    ("last_notified_at", "TIMESTAMPTZ"),
+                    ("broadcast_at", "TIMESTAMPTZ"),
+                ]:
+                    with contextlib.suppress(duckdb.Error):
+                        self.conn.execute(
+                            f"ALTER TABLE episodes ADD COLUMN IF NOT EXISTS {col_def[0]} {col_def[1]}"
+                        )
+
+                # Backfill legacy rows with extracted idec and preserve notified state
+                with contextlib.suppress(duckdb.Error):
                     self.conn.execute(
-                        f"ALTER TABLE episodes ADD COLUMN IF NOT EXISTS {col_def[0]} {col_def[1]}"
+                        "UPDATE episodes SET idec = regexp_extract(url, '/([0-9]{10,20})/?$', 1) WHERE idec IS NULL"
                     )
-                except Exception:
-                    pass
 
-            # Backfill legacy rows with extracted idec and preserve notified state
-            try:
-                self.conn.execute(
-                    "UPDATE episodes SET idec = regexp_extract(url, '/([0-9]{10,20})/?$', 1) WHERE idec IS NULL"
-                )
-            except Exception:
-                pass
+                with contextlib.suppress(duckdb.Error):
+                    self.conn.execute(
+                        "UPDATE episodes SET last_notified_at = first_discovered_at WHERE last_notified_at IS NULL AND first_discovered_at IS NOT NULL"
+                    )
 
-            try:
-                self.conn.execute(
-                    "UPDATE episodes SET last_notified_at = first_discovered_at WHERE last_notified_at IS NULL AND first_discovered_at IS NOT NULL"
-                )
-            except Exception:
-                pass
+                self.set_guild_value("schema_migrated_v1", "1")
 
     # --- TV shows ---
     def add_or_reactivate_show(self, url: str) -> str:
         canonical_url = normalize_show_url(url)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with self._lock:
             self.conn.execute(
                 """
@@ -111,7 +114,7 @@ class DuckRepo:
             )
         return canonical_url
 
-    def insert_show(self, url: str, metadata: Optional[Dict[str, Any]] = None) -> str:
+    def insert_show(self, url: str, metadata: dict[str, Any] | None = None) -> str:
         """Helper to add or update show metadata."""
         canonical_url = normalize_show_url(url)
         with self._lock:
@@ -134,7 +137,7 @@ class DuckRepo:
                 ).fetchone()
             return bool(row)
 
-    def list_shows(self, active: Optional[bool] = None) -> List[Tuple[str, bool]]:
+    def list_shows(self, active: bool | None = None) -> list[tuple[str, bool]]:
         with self._lock:
             if active is None:
                 q = "SELECT url, is_active FROM tv_shows ORDER BY url"
@@ -144,7 +147,7 @@ class DuckRepo:
                 rows = self.conn.execute(q, [active]).fetchall()
             return [(r[0], bool(r[1])) for r in rows]
 
-    def get_active_urls(self) -> List[str]:
+    def get_active_urls(self) -> list[str]:
         with self._lock:
             return [
                 r[0]
@@ -153,7 +156,7 @@ class DuckRepo:
                 ).fetchall()
             ]
 
-    def get_active_shows(self) -> List[dict]:
+    def get_active_shows(self) -> list[dict]:
         with self._lock:
             rows = self.conn.execute(
                 "SELECT url, metadata FROM tv_shows WHERE is_active = true"
@@ -168,9 +171,9 @@ class DuckRepo:
                 for r in rows
             ]
 
-    def update_show_metadata(self, url: str, metadata: Dict[str, Any]) -> None:
+    def update_show_metadata(self, url: str, metadata: dict[str, Any]) -> None:
         canonical_url = normalize_show_url(url)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with self._lock:
             self.conn.execute(
                 """
@@ -184,11 +187,11 @@ class DuckRepo:
         self,
         show_url: str,
         url: str,
-        name: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        idec: Optional[str] = None,
-        broadcast_at: Optional[datetime] = None,
-        cooldown_days: Optional[int] = None,
+        name: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        idec: str | None = None,
+        broadcast_at: datetime | None = None,
+        cooldown_days: int | None = None,
         backfill: bool = False,
     ) -> bool:
         """
@@ -200,7 +203,7 @@ class DuckRepo:
         canonical_ep_url = (
             canonical_episode_url(canonical_show, ep_id) if ep_id else url
         )
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         meta_dict = metadata or {}
         meta_json = json.dumps(meta_dict, ensure_ascii=False)
         effective_cooldown = (
@@ -281,18 +284,14 @@ class DuckRepo:
                 return False
 
             cooldown_delta = timedelta(days=effective_cooldown)
-            if now - last_notified > cooldown_delta:
-                # Cooldown has passed (e.g. re-aired / rerun)
-                return True
-
-            return False
+            return now - last_notified > cooldown_delta
 
     def insert_new_episode(
         self,
         show_url: str,
         url: str,
-        name: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        name: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> bool:
         """
         Backwards-compatible wrapper around record_episode.
@@ -304,13 +303,13 @@ class DuckRepo:
             metadata=metadata,
         )
 
-    def mark_episodes_notified(self, urls: List[str]) -> None:
+    def mark_episodes_notified(self, urls: list[str]) -> None:
         """
         Marks the provided episode URLs as having been notified at the current timestamp.
         """
         if not urls:
             return
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with self._lock:
             for u in urls:
                 # Match both raw URL and canonical URL
@@ -337,14 +336,14 @@ class DuckRepo:
                 [key, value],
             )
 
-    def get_guild_value(self, key: str) -> Optional[str]:
+    def get_guild_value(self, key: str) -> str | None:
         with self._lock:
             row = self.conn.execute(
                 "SELECT value FROM guild_config WHERE key = ?", [key]
             ).fetchone()
             return row[0] if row else None
 
-    def get_show_episodes(self, show_url: str) -> List[dict]:
+    def get_show_episodes(self, show_url: str) -> list[dict]:
         """
         Returns all tracked episodes for a specific show.
         """
@@ -429,7 +428,7 @@ class DuckRepo:
                         count += 1
         return count
 
-    def standardize_all_episodes(self, show_url: Optional[str] = None) -> int:
+    def standardize_all_episodes(self, show_url: str | None = None) -> int:
         """
         Standardizes the 'name' column for episodes in the database using format_standardized_title.
         If show_url is provided, only standardizes episodes for that show.
@@ -451,13 +450,9 @@ class DuckRepo:
                     if meta_raw and isinstance(meta_raw, str)
                     else (meta_raw or {})
                 )
-                raw_title = (
-                    meta.get("title") or meta.get("name") or cur_name or ""
-                )
+                raw_title = meta.get("title") or meta.get("name") or cur_name or ""
                 season = meta.get("season")
-                std_name = format_standardized_title(
-                    raw_title, season, idec=idec
-                )
+                std_name = format_standardized_title(raw_title, season, idec=idec)
                 if std_name and std_name != cur_name:
                     self.conn.execute(
                         "UPDATE episodes SET name = ? WHERE url = ?",
@@ -471,9 +466,9 @@ class DuckRepo:
         Returns summary metrics for the database.
         """
         with self._lock:
-            total_shows = self.conn.execute(
-                "SELECT COUNT(*) FROM tv_shows"
-            ).fetchone()[0]
+            total_shows = self.conn.execute("SELECT COUNT(*) FROM tv_shows").fetchone()[
+                0
+            ]
             active_shows = self.conn.execute(
                 "SELECT COUNT(*) FROM tv_shows WHERE is_active = true"
             ).fetchone()[0]
@@ -491,4 +486,3 @@ class DuckRepo:
                 "total_episodes": total_episodes,
                 "notified_episodes": notified_episodes,
             }
-

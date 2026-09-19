@@ -1,9 +1,10 @@
 import pytest
+
 from tvwatch.core.utils import (
-    roman_to_int,
-    parse_season_number,
-    parse_episode_title_and_number,
     format_standardized_title,
+    parse_episode_title_and_number,
+    parse_season_number,
+    roman_to_int,
 )
 
 
@@ -88,7 +89,11 @@ def test_parse_episode_title_and_number(title_input, expected_num, expected_titl
 @pytest.mark.parametrize(
     "raw_title, season_val, expected",
     [
-        ("10/26 Kde se vzal Měsíc", {"title": "VI.\xa0řada"}, "S06E10 - Kde se vzal Měsíc"),
+        (
+            "10/26 Kde se vzal Měsíc",
+            {"title": "VI.\xa0řada"},
+            "S06E10 - Kde se vzal Měsíc",
+        ),
         ("11/26 Den na\xa0pláži", {"title": "VI.\xa0řada"}, "S06E11 - Den na pláži"),
         ("1/12 První případ", {"title": "I. řada"}, "S01E01 - První případ"),
         ("3. díl - Návrat", "2. řada", "S02E03 - Návrat"),
@@ -97,7 +102,11 @@ def test_parse_episode_title_and_number(title_input, expected_num, expected_titl
         ("10/26 Kde se vzal Měsíc", None, "E10 - Kde se vzal Měsíc"),
         ("Stínka - první část", None, "Stínka - první část"),
         ("8. srpna 2005", None, "8. srpna 2005"),
-        ("S06E10 - Kde se vzal Měsíc", {"title": "VI. řada"}, "S06E10 - Kde se vzal Měsíc"),  # Idempotent
+        (
+            "S06E10 - Kde se vzal Měsíc",
+            {"title": "VI. řada"},
+            "S06E10 - Kde se vzal Měsíc",
+        ),  # Idempotent
     ],
 )
 def test_format_standardized_title(raw_title, season_val, expected):
