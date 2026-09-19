@@ -15,6 +15,7 @@ dependencies = [
   "cssselect>=1.4.0",
   "pytest>=9.0.2",
   "pytz>=2024.1",
+  "rich>=13.0.0",
 ]
 
 [tool.setuptools]

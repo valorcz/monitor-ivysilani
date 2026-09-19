@@ -171,6 +171,34 @@ class DuckRepo:
                 for r in rows
             ]
 
+    def get_shows_summary(self, active: bool | None = None) -> list[dict]:
+        """
+        Returns summary of shows including url, is_active, metadata, and episode counts.
+        """
+        with self._lock:
+            where_clause = "" if active is None else "WHERE s.is_active = ?"
+            params = [] if active is None else [active]
+            q = f"""
+                SELECT s.url, s.is_active, s.metadata, COUNT(e.url) as ep_count
+                FROM tv_shows s
+                LEFT JOIN episodes e ON s.url = e.show_url
+                {where_clause}
+                GROUP BY s.url, s.is_active, s.metadata
+                ORDER BY s.url
+            """
+            rows = self.conn.execute(q, params).fetchall()
+            return [
+                {
+                    "url": r[0],
+                    "is_active": bool(r[1]),
+                    "metadata": json.loads(r[2])
+                    if r[2] and isinstance(r[2], str)
+                    else (r[2] or {}),
+                    "episodes_count": r[3],
+                }
+                for r in rows
+            ]
+
     def update_show_metadata(self, url: str, metadata: dict[str, Any]) -> None:
         canonical_url = normalize_show_url(url)
         now = datetime.now(UTC)
