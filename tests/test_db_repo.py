@@ -1,5 +1,6 @@
 import os
 import tempfile
+
 from tvwatch.core.db import DuckRepo
 
 
@@ -104,7 +105,7 @@ def test_concurrent_episode_recording():
                         )
                         repo.mark_episodes_notified([ep_url])
                         repo.get_active_shows()
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         errors.append(e)
                 return errors
 
@@ -209,5 +210,3 @@ def test_standardize_all_episodes():
             assert count == 1
             eps = repo.get_show_episodes(show)
             assert eps[0]["name"] == "S01E01 - Stínka - první část"
-
-

@@ -1,5 +1,5 @@
-from datetime import datetime
 import re
+from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
@@ -273,7 +273,7 @@ def format_ascii_table(headers: list[str], rows: list[list[str]]) -> str:
     return "\n".join(lines)
 
 
-def format_discord_timestamp(dt: datetime | int | float, style: str = "R") -> str:
+def format_discord_timestamp(dt: datetime | float, style: str = "R") -> str:
     """
     Formats a datetime or timestamp into a Discord dynamic timestamp tag, e.g. <t:1726700000:R>.
     Styles:
@@ -289,5 +289,3 @@ def format_discord_timestamp(dt: datetime | int | float, style: str = "R") -> st
     else:
         ts = int(dt)
     return f"<t:{ts}:{style}>"
-
-

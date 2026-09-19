@@ -1,8 +1,9 @@
 import asyncio
-from datetime import datetime
+import contextlib
 import glob
 import os
 import sys
+from datetime import UTC, datetime
 
 import discord
 from discord import app_commands
@@ -60,7 +61,7 @@ async def execute_batch_download_with_progress(
         button.style = discord.ButtonStyle.secondary
     await interaction.response.edit_message(view=view)
 
-    start_time = datetime.now()
+    start_time = datetime.now(tz=UTC)
     embed = discord.Embed(
         title="Hromadné stahování epizod",
         color=3447003,  # Blue
@@ -96,10 +97,8 @@ async def execute_batch_download_with_progress(
             if button and (now_ts - last_btn_time > 2.0):
                 last_btn_time = now_ts
                 button.label = f"Stahuje se ({idx}/{tot})..."
-                try:
+                with contextlib.suppress(discord.HTTPException):
                     await interaction.edit_original_response(view=view)
-                except Exception:
-                    pass
 
             embed.set_field_at(
                 0, name="Stav", value=f"Stahuje se {idx} z {tot}", inline=True
@@ -109,15 +108,11 @@ async def execute_batch_download_with_progress(
                     4, name="Aktuální díl", value=f"<{url}>", inline=False
                 )
             else:
-                embed.add_field(
-                    name="Aktuální díl", value=f"<{url}>", inline=False
-                )
+                embed.add_field(name="Aktuální díl", value=f"<{url}>", inline=False)
             if now_ts - last_edit_time > 2.0:
                 last_edit_time = now_ts
-                try:
+                with contextlib.suppress(discord.HTTPException):
                     await followup_msg.edit(embed=embed)
-                except Exception:
-                    pass
         else:
             # Finished downloading episode idx
             if status:
@@ -133,13 +128,11 @@ async def execute_batch_download_with_progress(
             )
             if (now_ts - last_edit_time > 2.0) or (done_count == tot):
                 last_edit_time = now_ts
-                try:
+                with contextlib.suppress(discord.HTTPException):
                     await followup_msg.edit(embed=embed)
-                except Exception:
-                    pass
 
     results = await download_many(urls, logger, progress_callback=_progress)
-    elapsed = (datetime.now() - start_time).total_seconds()
+    elapsed = (datetime.now(tz=UTC) - start_time).total_seconds()
     ok = sum(1 for _, s, _ in results if s)
     failed = len(results) - ok
 
@@ -150,15 +143,11 @@ async def execute_batch_download_with_progress(
             if failed == 0
             else discord.ButtonStyle.secondary
         )
-        try:
+        with contextlib.suppress(discord.HTTPException):
             await interaction.edit_original_response(view=view)
-        except Exception:
-            pass
 
     embed.title = "Hromadné stahování dokončeno"
-    embed.color = (
-        3066993 if failed == 0 else (15158332 if ok == 0 else 15105570)
-    )
+    embed.color = 3066993 if failed == 0 else (15158332 if ok == 0 else 15105570)
     embed.set_field_at(0, name="Stav", value="Dokončeno", inline=True)
     embed.set_field_at(
         1,
@@ -171,13 +160,9 @@ async def execute_batch_download_with_progress(
             4, name="Celkový čas", value=f"{elapsed:.1f} s", inline=False
         )
     else:
-        embed.add_field(
-            name="Celkový čas", value=f"{elapsed:.1f} s", inline=False
-        )
-    try:
+        embed.add_field(name="Celkový čas", value=f"{elapsed:.1f} s", inline=False)
+    with contextlib.suppress(discord.HTTPException):
         await followup_msg.edit(embed=embed)
-    except Exception:
-        pass
 
     return results
 
@@ -186,9 +171,7 @@ class DownloadAllView(discord.ui.View):
     def __init__(self, ep_urls: list):
         super().__init__(timeout=None)
         self.ep_urls = ep_urls
-        label = (
-            "Stáhnout" if len(ep_urls) == 1 else f"Stáhnout vše ({len(ep_urls)})"
-        )
+        label = "Stáhnout" if len(ep_urls) == 1 else f"Stáhnout vše ({len(ep_urls)})"
         btn = discord.ui.Button(label=label, style=discord.ButtonStyle.primary)
         btn.callback = self.download_all
         self.add_item(btn)
@@ -200,9 +183,7 @@ class DownloadAllView(discord.ui.View):
         )
 
 
-async def dispatch_notifications(
-    new_data: list, target, repo: DuckRepo | None = None
-):
+async def dispatch_notifications(new_data: list, target, repo: DuckRepo | None = None):
     all_notified_urls = []
     for show in new_data:
         show_name = show.get("tv_series", {}).get("name", "Neznámý seriál")
@@ -221,13 +202,9 @@ async def dispatch_notifications(
             date_str = ""
             date_info = ep.get("date")
             if isinstance(date_info, dict) and date_info.get("datetime"):
-                try:
-                    dt = datetime.fromisoformat(
-                        date_info["datetime"].replace("Z", "+00:00")
-                    )
+                with contextlib.suppress(ValueError, TypeError):
+                    dt = datetime.fromisoformat(date_info["datetime"])
                     date_str = f" ({format_discord_timestamp(dt, 'R')})"
-                except Exception:
-                    pass
             lines.append(f"• [{name}]({url}){date_str}")
         embed.description = "\n".join(lines)
         view = DownloadAllView(ep_urls=ep_urls)
@@ -249,12 +226,8 @@ class TVScraperBot(commands.Bot):
     @tasks.loop(hours=1)
     async def sync_loop(self):
         logger.info("Running scheduled multi-server sync...")
-        for db_path in glob.glob(
-            os.path.join(CONFIG.DATA_DIR, "guild_*.duckdb")
-        ):
-            gid = (
-                os.path.splitext(os.path.basename(db_path))[0].split("_", 1)[1]
-            )
+        for db_path in glob.glob(os.path.join(CONFIG.DATA_DIR, "guild_*.duckdb")):
+            gid = os.path.splitext(os.path.basename(db_path))[0].split("_", 1)[1]
             try:
                 guild_id = int(gid)
             except ValueError:
@@ -275,9 +248,7 @@ class TVScraperBot(commands.Bot):
                 new = await sync_all_concurrent(repo, logger, max_concurrency=4)
                 if new:
                     payload = [r.to_payload() for r in new]
-                    await dispatch_notifications(
-                        payload, target=channel, repo=repo
-                    )
+                    await dispatch_notifications(payload, target=channel, repo=repo)
 
     @sync_loop.before_loop
     async def before_sync_loop(self):
@@ -288,9 +259,7 @@ bot = TVScraperBot()
 
 
 # ---- Autocomplete helpers ----
-async def active_shows_autocomplete(
-    interaction: discord.Interaction, current: str
-):
+async def active_shows_autocomplete(interaction: discord.Interaction, current: str):
     db_path = guild_db_path(interaction.guild_id)
     with DuckRepo(db_path) as repo:
         shows = repo.list_shows(active=True)
@@ -298,9 +267,7 @@ async def active_shows_autocomplete(
     return [app_commands.Choice(name=u, value=u) for u in suggestions[:25]]
 
 
-async def all_shows_autocomplete(
-    interaction: discord.Interaction, current: str
-):
+async def all_shows_autocomplete(interaction: discord.Interaction, current: str):
     db_path = guild_db_path(interaction.guild_id)
     with DuckRepo(db_path) as repo:
         shows = repo.list_shows(active=None)
@@ -318,9 +285,7 @@ async def all_shows_autocomplete(
 async def set_channel_cmd(interaction: discord.Interaction):
     db_path = guild_db_path(interaction.guild_id)
     with DuckRepo(db_path) as repo:
-        repo.set_guild_value(
-            "notification_channel", str(interaction.channel_id)
-        )
+        repo.set_guild_value("notification_channel", str(interaction.channel_id))
     await interaction.response.send_message(
         f"Automatická upozornění budou chodit sem: <#{interaction.channel_id}>"
     )
@@ -339,9 +304,7 @@ async def add_cmd(interaction: discord.Interaction, url: str):
             await asyncio.to_thread(
                 sync_one_show, canonical_url, repo, logger, backfill=True
             )
-    await interaction.followup.send(
-        f"Přidáno ke sledování:\n{canonical_url}"
-    )
+    await interaction.followup.send(f"Přidáno ke sledování:\n{canonical_url}")
 
 
 @bot.tree.command(name="disable", description="Pozastaví sledování pořadu")
@@ -354,9 +317,7 @@ async def disable_cmd(interaction: discord.Interaction, url: str):
     with DuckRepo(db_path) as repo:
         ok = repo.disable_show(url)
     msg = (
-        f"Sledování pozastaveno:\n{url}"
-        if ok
-        else f"URL v databázi nenalezeno:\n{url}"
+        f"Sledování pozastaveno:\n{url}" if ok else f"URL v databázi nenalezeno:\n{url}"
     )
     await interaction.response.send_message(msg)
 
@@ -390,9 +351,7 @@ class ShowsListView(discord.ui.View):
         self.active_shows_meta = active_shows_meta
         self.page = 0
         self.per_page = 10
-        self.total_pages = max(
-            1, (len(shows) + self.per_page - 1) // self.per_page
-        )
+        self.total_pages = max(1, (len(shows) + self.per_page - 1) // self.per_page)
         self.message: discord.Message | None = None
         self._build_components()
 
@@ -426,26 +385,20 @@ class ShowsListView(discord.ui.View):
         if self.page > 0:
             self.page -= 1
         self._build_components()
-        await interaction.response.edit_message(
-            embed=self.get_embed(), view=self
-        )
+        await interaction.response.edit_message(embed=self.get_embed(), view=self)
 
     async def _on_next(self, interaction: discord.Interaction):
         if self.page < self.total_pages - 1:
             self.page += 1
         self._build_components()
-        await interaction.response.edit_message(
-            embed=self.get_embed(), view=self
-        )
+        await interaction.response.edit_message(embed=self.get_embed(), view=self)
 
     async def on_timeout(self):
         for child in self.children:
             child.disabled = True
         if self.message:
-            try:
+            with contextlib.suppress(discord.HTTPException):
                 await self.message.edit(view=self)
-            except Exception:
-                pass
 
     def get_embed(self) -> discord.Embed:
         embed = discord.Embed(
@@ -468,9 +421,7 @@ class ShowsListView(discord.ui.View):
 
         embed.description += "\n\n".join(lines)
         if self.total_pages > 1:
-            embed.set_footer(
-                text=f"Stránka {self.page + 1} z {self.total_pages}"
-            )
+            embed.set_footer(text=f"Stránka {self.page + 1} z {self.total_pages}")
         return embed
 
 
@@ -494,10 +445,8 @@ async def list_cmd(interaction: discord.Interaction):
         embed=view.get_embed(), view=view if view.total_pages > 1 else None
     )
     if view.total_pages > 1:
-        try:
+        with contextlib.suppress(discord.HTTPException):
             view.message = await interaction.original_response()
-        except Exception:
-            pass
 
 
 class EpisodesView(discord.ui.View):
@@ -533,9 +482,10 @@ class EpisodesView(discord.ui.View):
     def _is_playable(ep: dict) -> bool:
         meta = ep.get("metadata") or {}
         card_labels = meta.get("cardLabels") or {}
-        if card_labels.get("center") and "nemá práva" in str(
+        if (
             card_labels.get("center")
-        ).lower():
+            and "nemá práva" in str(card_labels.get("center")).lower()
+        ):
             return False
         if "playable" in meta:
             return bool(meta["playable"])
@@ -587,8 +537,7 @@ class EpisodesView(discord.ui.View):
             s_count = sum(
                 1
                 for e in self.all_episodes
-                if ((e.get("metadata") or {}).get("season") or {}).get("title")
-                == s
+                if ((e.get("metadata") or {}).get("season") or {}).get("title") == s
                 or (e.get("metadata") or {}).get("season") == s
             )
             select_options.append(
@@ -635,9 +584,7 @@ class EpisodesView(discord.ui.View):
         self.add_item(next_btn)
 
         # 3. Download Playable Button (Row 1)
-        playable_in_filtered = [
-            e["url"] for e in filtered if self._is_playable(e)
-        ]
+        playable_in_filtered = [e["url"] for e in filtered if self._is_playable(e)]
         dl_btn = discord.ui.Button(
             label=f"Stáhnout dostupné ({len(playable_in_filtered)})",
             style=discord.ButtonStyle.primary,
@@ -651,24 +598,18 @@ class EpisodesView(discord.ui.View):
         self.current_filter = interaction.data["values"][0]  # type: ignore
         self.page = 0
         self._build_components()
-        await interaction.response.edit_message(
-            embed=self.get_embed(), view=self
-        )
+        await interaction.response.edit_message(embed=self.get_embed(), view=self)
 
     async def _on_prev(self, interaction: discord.Interaction):
         if self.page > 0:
             self.page -= 1
         self._build_components()
-        await interaction.response.edit_message(
-            embed=self.get_embed(), view=self
-        )
+        await interaction.response.edit_message(embed=self.get_embed(), view=self)
 
     async def _on_next(self, interaction: discord.Interaction):
         self.page += 1
         self._build_components()
-        await interaction.response.edit_message(
-            embed=self.get_embed(), view=self
-        )
+        await interaction.response.edit_message(embed=self.get_embed(), view=self)
 
     async def _on_download(self, interaction: discord.Interaction):
         filtered = self._get_filtered_episodes()
@@ -682,8 +623,7 @@ class EpisodesView(discord.ui.View):
         dl_buttons = [
             item
             for item in self.children
-            if isinstance(item, discord.ui.Button)
-            and "Stáhnout" in (item.label or "")
+            if isinstance(item, discord.ui.Button) and "Stáhnout" in (item.label or "")
         ]
         btn = dl_buttons[0] if dl_buttons else None
         await execute_batch_download_with_progress(
@@ -694,10 +634,8 @@ class EpisodesView(discord.ui.View):
         for child in self.children:
             child.disabled = True
         if self.message:
-            try:
+            with contextlib.suppress(discord.HTTPException):
                 await self.message.edit(view=self)
-            except Exception:
-                pass
 
     def get_embed(self) -> discord.Embed:
         filtered = self._get_filtered_episodes()
@@ -738,17 +676,9 @@ class EpisodesView(discord.ui.View):
             )
             ep_url = ep.get("url") or self.canonical_url
 
-            card_avail = (
-                (ep.get("metadata") or {})
-                .get("cardLabels", {})
-                .get("topLeft")
-            )
+            card_avail = (ep.get("metadata") or {}).get("cardLabels", {}).get("topLeft")
             if self._is_playable(ep):
-                avail = (
-                    card_avail.replace("\xa0", " ")
-                    if card_avail
-                    else "Dostupné"
-                )
+                avail = card_avail.replace("\xa0", " ") if card_avail else "Dostupné"
             else:
                 avail = "Vypršelo"
 
@@ -793,31 +723,25 @@ async def episodes_cmd(interaction: discord.Interaction, url: str):
         return
 
     view = EpisodesView(canonical_url=canonical_url, episodes=episodes)
-    await interaction.response.send_message(
-        embed=view.get_embed(), view=view
-    )
-    try:
+    await interaction.response.send_message(embed=view.get_embed(), view=view)
+    with contextlib.suppress(discord.HTTPException):
         view.message = await interaction.original_response()
-    except Exception:
-        pass
 
 
-@bot.tree.command(
-    name="download", description="Stáhne konkrétní epizodu podle URL"
-)
+@bot.tree.command(name="download", description="Stáhne konkrétní epizodu podle URL")
 @app_commands.guild_only()
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.checks.has_permissions(manage_guild=True)
 async def download_cmd(interaction: discord.Interaction, url: str):
     try:
         assert_allowed_url(url)
-    except Exception as e:
+    except ValueError as e:
         await interaction.response.send_message(
             f"Neplatná URL adresa: {e}", ephemeral=True
         )
         return
 
-    start_time = datetime.now()
+    start_time = datetime.now(tz=UTC)
     embed = discord.Embed(
         title="Stahování epizody",
         color=3447003,  # Blue
@@ -836,17 +760,15 @@ async def download_cmd(interaction: discord.Interaction, url: str):
 
     logger.info(f"Ad-hoc download requested via Discord for: {url}")
     _, success, err = await download_one(url, logger)
-    elapsed = (datetime.now() - start_time).total_seconds()
+    elapsed = (datetime.now(tz=UTC) - start_time).total_seconds()
 
     if success:
         embed.color = 3066993  # Green
         embed.set_field_at(1, name="Stav", value="Dokončeno", inline=True)
-        embed.add_field(
-            name="Doba stahování", value=f"{elapsed:.1f} s", inline=True
-        )
+        embed.add_field(name="Doba stahování", value=f"{elapsed:.1f} s", inline=True)
         embed.add_field(
             name="Dokončeno",
-            value=f"{format_discord_timestamp(datetime.now(), 'T')}",
+            value=f"{format_discord_timestamp(datetime.now(tz=UTC), 'T')}",
             inline=False,
         )
         await interaction.edit_original_response(embed=embed)
@@ -863,9 +785,7 @@ async def download_cmd(interaction: discord.Interaction, url: str):
         await interaction.edit_original_response(embed=embed)
 
 
-@bot.tree.command(
-    name="status", description="Zobrazí statistiky sledování a úložiště"
-)
+@bot.tree.command(name="status", description="Zobrazí statistiky sledování a úložiště")
 @app_commands.guild_only()
 async def status_cmd(interaction: discord.Interaction):
     db_path = guild_db_path(interaction.guild_id)
@@ -914,14 +834,10 @@ async def sync_cmd(interaction: discord.Interaction):
     with DuckRepo(db_path) as repo:
         new = await sync_all_concurrent(repo, logger, max_concurrency=4)
         if not new:
-            await interaction.followup.send(
-                "Kontrola dokončena. Žádné nové epizody."
-            )
+            await interaction.followup.send("Kontrola dokončena. Žádné nové epizody.")
             return
         payload = [r.to_payload() for r in new]
-        await dispatch_notifications(
-            payload, target=interaction.followup, repo=repo
-        )
+        await dispatch_notifications(payload, target=interaction.followup, repo=repo)
 
 
 @bot.tree.error
@@ -962,4 +878,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -1,5 +1,6 @@
 import asyncio
 import types
+
 import tvwatch.core.downloader as dl
 
 
@@ -42,7 +43,7 @@ def test_download_one_monkeypatch(monkeypatch):
             pass
 
     async def run():
-        url, ok, err = await dl.download_one(
+        _url, ok, err = await dl.download_one(
             "https://ceskatelevize.cz/porady/x/1", logger=_L()
         )
         assert ok and not err
@@ -98,4 +99,3 @@ def test_download_many_progress_callback(monkeypatch):
         assert events[3] == (2, 2, urls[1], True)
 
     asyncio.run(run())
-

@@ -1,5 +1,5 @@
-from tvwatch.core.scraper import _extract_schema_data
 from tvwatch.core.models import Episode
+from tvwatch.core.scraper import _extract_schema_data
 
 
 def test_extracts_series_and_items_from_jsonld():
@@ -18,7 +18,7 @@ def test_extracts_series_and_items_from_jsonld():
        ]}
       </script>
     </div>
-    """.encode("utf-8")
+    """.encode()
     data = _extract_schema_data(html)
     assert data["series"]["name"] == "Test Serial"
     assert len(data["list"]["itemListElement"]) == 2
@@ -30,9 +30,10 @@ def test_extracts_series_and_items_from_jsonld():
 
 def test_dynamic_graphql_hash_caching():
     from unittest.mock import MagicMock
+
     from tvwatch.core.scraper import (
-        fetch_dynamic_graphql_hash,
         clear_graphql_hash_cache,
+        fetch_dynamic_graphql_hash,
     )
 
     clear_graphql_hash_cache()
@@ -42,12 +43,16 @@ def test_dynamic_graphql_hash_caching():
     session.get.return_value = mock_resp
 
     # First call uses network and falls back to config default
-    hash1 = fetch_dynamic_graphql_hash(session, "https://ceskatelevize.cz/porady/123-test/")
+    hash1 = fetch_dynamic_graphql_hash(
+        session, "https://ceskatelevize.cz/porady/123-test/"
+    )
     assert len(hash1) == 64
     assert session.get.call_count == 1
 
     # Second call should return cached hash without network call
-    hash2 = fetch_dynamic_graphql_hash(session, "https://ceskatelevize.cz/porady/123-test/")
+    hash2 = fetch_dynamic_graphql_hash(
+        session, "https://ceskatelevize.cz/porady/123-test/"
+    )
     assert hash2 == hash1
     assert session.get.call_count == 1  # No additional network call
 
@@ -55,4 +60,3 @@ def test_dynamic_graphql_hash_caching():
     clear_graphql_hash_cache()
     fetch_dynamic_graphql_hash(session, "https://ceskatelevize.cz/porady/123-test/")
     assert session.get.call_count == 2
-

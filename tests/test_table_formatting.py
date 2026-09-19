@@ -1,4 +1,5 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 from tvwatch.core.utils import format_ascii_table, format_discord_timestamp
 
 
@@ -42,7 +43,7 @@ def test_format_ascii_table_diacritics():
 
 
 def test_format_discord_timestamp_datetime():
-    dt = datetime(2026, 9, 18, 20, 0, 0, tzinfo=timezone.utc)
+    dt = datetime(2026, 9, 18, 20, 0, 0, tzinfo=UTC)
     tag = format_discord_timestamp(dt, "R")
     assert tag == f"<t:{int(dt.timestamp())}:R>"
 
@@ -55,24 +56,27 @@ def test_format_discord_timestamp_epoch():
 
 def test_episodes_view_pagination_and_playability():
     import asyncio
+
     from tvwatch.interfaces.discord_bot import EpisodesView
 
     async def _runner():
         episodes = []
         for s in [1, 6]:
             for e in range(1, 10):
-                playable = (s == 6 and e >= 5)  # 5 playable episodes in season 6
+                playable = s == 6 and e >= 5  # 5 playable episodes in season 6
                 card_label = "Dostupné do 23. 9." if playable else None
-                episodes.append({
-                    "url": f"https://www.ceskatelevize.cz/porady/123-test/222385702{s:02d}{e:03d}/",
-                    "name": f"{e}/26 Epizoda {e}",
-                    "broadcast_at": "2026-09-04T07:15:00",
-                    "metadata": {
-                        "playable": playable,
-                        "season": {"title": f"{s}. řada"},
-                        "cardLabels": {"topLeft": card_label} if card_label else {},
-                    },
-                })
+                episodes.append(
+                    {
+                        "url": f"https://www.ceskatelevize.cz/porady/123-test/222385702{s:02d}{e:03d}/",
+                        "name": f"{e}/26 Epizoda {e}",
+                        "broadcast_at": "2026-09-04T07:15:00",
+                        "metadata": {
+                            "playable": playable,
+                            "season": {"title": f"{s}. řada"},
+                            "cardLabels": {"topLeft": card_label} if card_label else {},
+                        },
+                    }
+                )
 
         view = EpisodesView("https://www.ceskatelevize.cz/porady/123-test/", episodes)
         assert view.current_filter == "playable"
@@ -117,6 +121,7 @@ def test_episodes_view_pagination_and_playability():
 
 def test_shows_list_view_pagination():
     import asyncio
+
     from tvwatch.interfaces.discord_bot import ShowsListView
 
     async def _runner():
@@ -150,5 +155,3 @@ def test_shows_list_view_pagination():
         assert embed_page2.footer.text == "Stránka 2 z 3"
 
     asyncio.run(_runner())
-
-

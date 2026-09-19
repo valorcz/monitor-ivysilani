@@ -1,6 +1,8 @@
-from typing import Any, Dict, List, Optional
 import re
+from typing import Any
+
 from pydantic import BaseModel, Field, HttpUrl, field_validator
+
 from .config import CONFIG
 
 _ALLOWED = re.compile(CONFIG.ALLOWED_URL_RE)
@@ -14,17 +16,17 @@ def _validate_allowed(url: str) -> str:
 
 class Episode(BaseModel):
     url: HttpUrl
-    name: Optional[str] = None
-    idec: Optional[str] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-    position: Optional[int] = None
+    name: str | None = None
+    idec: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    position: int | None = None
 
     @field_validator("url", mode="before")
     @classmethod
     def _check_allowed(cls, v: str):
         return _validate_allowed(v)
 
-    def model_dump_public(self) -> Dict[str, Any]:
+    def model_dump_public(self) -> dict[str, Any]:
         """
         JSON shape used by existing outputs (CLI/Discord).
         """
@@ -37,8 +39,8 @@ class Episode(BaseModel):
 
 class TVSeries(BaseModel):
     url: HttpUrl
-    name: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
+    name: str | None = None
+    metadata: dict[str, Any] | None = None
 
     @field_validator("url", mode="before")
     @classmethod
@@ -49,14 +51,14 @@ class TVSeries(BaseModel):
 class SyncResult(BaseModel):
     source_url: HttpUrl
     tv_series: TVSeries
-    new_episodes: List[Episode]
+    new_episodes: list[Episode]
 
     @field_validator("source_url", mode="before")
     @classmethod
     def _check_allowed(cls, v: str):
         return _validate_allowed(v)
 
-    def to_payload(self) -> Dict[str, Any]:
+    def to_payload(self) -> dict[str, Any]:
         """
         Exact structure previously emitted on stdout and used by Discord.
         """

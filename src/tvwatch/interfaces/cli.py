@@ -135,9 +135,7 @@ def build_parser():
         "standardize",
         help="Standardize episode names in database (SxxEyy - Title)",
     )
-    sp.add_argument(
-        "--url", default=None, help="Optional show URL to filter by"
-    )
+    sp.add_argument("--url", default=None, help="Optional show URL to filter by")
     sp.set_defaults(func=cmd_standardize)
     return p
 

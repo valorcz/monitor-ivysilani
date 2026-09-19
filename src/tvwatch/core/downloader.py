@@ -1,6 +1,6 @@
 import asyncio
-from datetime import datetime
-from typing import Iterable, List, Tuple, Callable, Awaitable, Optional
+import time
+from collections.abc import Awaitable, Callable, Iterable
 
 from .config import CONFIG
 from .net import assert_allowed_url
@@ -55,13 +55,13 @@ def resolved_ytdlp_command_preview() -> str:
     return " ".join(_base_cmd() + ["<URL>"])
 
 
-async def download_one(url: str, logger) -> Tuple[str, bool, str]:
+async def download_one(url: str, logger) -> tuple[str, bool, str]:
     """
     Download a single episode URL; returns (url, success, error_message).
     Logging is verbose-by-default but not noisy (stdout lines are prefixed).
     """
     assert_allowed_url(url)
-    started = datetime.now()
+    started = time.monotonic()
     cmd = _base_cmd() + [url]
 
     # Show the exact command at DEBUG level (useful for diagnosing env issues)
@@ -81,7 +81,7 @@ async def download_one(url: str, logger) -> Tuple[str, bool, str]:
         )
         logger.error(err)
         return url, False, err
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         err = f"Failed to start downloader process: {e}"
         logger.error(err)
         return url, False, err
@@ -90,7 +90,7 @@ async def download_one(url: str, logger) -> Tuple[str, bool, str]:
     await _stream_subprocess(proc, logger, prefix="[yt-dlp]")
 
     await proc.wait()
-    duration = (datetime.now() - started).total_seconds()
+    duration = time.monotonic() - started
 
     if proc.returncode == 0:
         logger.info(
@@ -119,16 +119,15 @@ async def download_one(url: str, logger) -> Tuple[str, bool, str]:
 async def download_many(
     urls: Iterable[str] | None,
     logger,
-    progress_callback: Optional[
-        Callable[[int, int, str, Optional[bool]], Awaitable[None]]
-    ] = None,
-) -> List[Tuple[str, bool, str]]:
+    progress_callback: Callable[[int, int, str, bool | None], Awaitable[None]]
+    | None = None,
+) -> list[tuple[str, bool, str]]:
     """
     Downloads provided URLs sequentially (simple and predictable).
     Supports progress_callback(current_idx, total_count, url, status)
     where status is None at start, and bool (success/fail) upon completion.
     """
-    results: List[Tuple[str, bool, str]] = []
+    results: list[tuple[str, bool, str]] = []
     if urls is None:
         return results
 
@@ -141,7 +140,7 @@ async def download_many(
         if progress_callback:
             try:
                 await progress_callback(i, total, u, None)
-            except Exception as ex:
+            except Exception as ex:  # noqa: BLE001
                 logger.warning(f"Error in progress_callback start: {ex}")
 
         r = await download_one(u, logger)
@@ -153,7 +152,7 @@ async def download_many(
         if progress_callback:
             try:
                 await progress_callback(i, total, u, r[1])
-            except Exception as ex:
+            except Exception as ex:  # noqa: BLE001
                 logger.warning(f"Error in progress_callback finish: {ex}")
 
     logger.info("Batch complete: %d/%d OK", ok, total)

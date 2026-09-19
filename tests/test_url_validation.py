@@ -1,4 +1,6 @@
 import pytest
+from pydantic import ValidationError
+
 from tvwatch.core.models import Episode, TVSeries
 
 
@@ -16,12 +18,12 @@ def test_episode_allows_ct_url():
     ],
 )
 def test_episode_rejects_non_matching(url):
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         Episode(url=url)
 
 
 def test_tvseries_validation():
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         TVSeries(url="https://example.com/something")
     ok = TVSeries(url="https://ceskatelevize.cz/porady/abc/", name="Test")
     assert ok.name == "Test"
