@@ -192,6 +192,100 @@ def parse_episode_title_and_number(title: str) -> tuple[int | None, str]:
     return None, clean
 
 
+def sanitize_slug(text: str) -> str:
+    """
+    Sanitizes text into a clean filesystem-friendly slug.
+    """
+    if not text:
+        return ""
+    import unicodedata
+
+    text = unicodedata.normalize("NFC", text.replace("\xa0", " "))
+    text = text.lower()
+    text = re.sub(r'[/\\?%*:|"<>—–\-_.,;()\[\]{}!]+|\s+', "_", text)
+    text = re.sub(r"_+", "_", text).strip("_")
+    return text
+
+
+def compute_plex_naming(
+    show_title: str | None,
+    raw_episode_title: str | None = None,
+    season_val: Any = None,
+    episode_id: str | None = None,
+) -> dict[str, Any]:
+    """
+    Computes Plex/Jellyfin metadata and filenames from show/episode information:
+      - clean_show_dir (e.g. 'slunecni_soustava')
+      - clean_season_dir (e.g. 'season_01')
+      - clean_filename (e.g. 'slunecni_soustava_s01e02_sopecne_svety')
+      - series (show title)
+      - season_number (int)
+      - episode_number (int | None)
+      - episode (clean episode title)
+    """
+    effective_show = show_title or "Show"
+    season_num = parse_season_number(season_val)
+    effective_season = season_num if season_num is not None else 1
+
+    clean_ep_title = ""
+    ep_num = None
+    if raw_episode_title:
+        ep_num, clean_ep_title = parse_episode_title_and_number(raw_episode_title)
+
+    if ep_num is None and episode_id and re.match(r"^\d{15}$", episode_id):
+        try:
+            part_num = int(episode_id[-4:])
+            if 1 <= part_num <= 999:
+                ep_num = part_num
+        except ValueError:
+            pass
+
+    if effective_show and clean_ep_title.endswith(f" - {effective_show}"):
+        clean_ep_title = clean_ep_title[: -len(f" - {effective_show}")].strip()
+    if effective_show and clean_ep_title.startswith(f"{effective_show} - "):
+        clean_ep_title = clean_ep_title[len(f"{effective_show} - ") :].strip()
+
+    clean_show_dir = sanitize_slug(effective_show)
+    clean_season_dir = f"season_{effective_season:02d}"
+    ep_slug = sanitize_slug(clean_ep_title)
+    if clean_show_dir:
+        import unicodedata
+
+        def _strip_accents(t: str) -> str:
+            return "".join(
+                c
+                for c in unicodedata.normalize("NFKD", t)
+                if not unicodedata.combining(c)
+            ).lower()
+
+        ascii_show = _strip_accents(clean_show_dir)
+        ascii_ep = _strip_accents(ep_slug)
+        if ascii_ep.endswith(f"_{ascii_show}"):
+            ep_slug = ep_slug[: -len(f"_{ascii_show}")].strip("_")
+        if ascii_ep.startswith(f"{ascii_show}_"):
+            ep_slug = ep_slug[len(f"{ascii_show}_") :].strip("_")
+
+    if ep_num is not None:
+        tag = f"s{effective_season:02d}e{ep_num:02d}"
+    else:
+        tag = f"s{effective_season:02d}"
+
+    parts = [clean_show_dir, tag]
+    if ep_slug:
+        parts.append(ep_slug)
+    clean_filename = "_".join(parts)
+
+    return {
+        "series": effective_show,
+        "season_number": effective_season,
+        "episode_number": ep_num,
+        "episode": clean_ep_title,
+        "clean_show_dir": clean_show_dir,
+        "clean_season_dir": clean_season_dir,
+        "clean_filename": clean_filename,
+    }
+
+
 def format_standardized_title(
     raw_title: str,
     season_val: Any = None,

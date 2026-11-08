@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 
 from pydantic import Field
@@ -55,8 +56,10 @@ class Config(BaseSettings):
         """
         if self.YTDLP_EXECUTABLE:
             exe = self.YTDLP_EXECUTABLE
-        else:
+        elif (Path(self.YTDLP_PREFIX_DIR) / self.YTDLP_SCRIPT_NAME).exists():
             exe = str(Path(self.YTDLP_PREFIX_DIR) / self.YTDLP_SCRIPT_NAME)
+        else:
+            exe = shutil.which("yt-dlp") or "yt-dlp"
 
         extra = [a for a in self.YTDLP_EXTRA_ARGS.split() if a]
         # If you still want to run via 'uv', you can include it in EXTRA_ARGS, e.g.:

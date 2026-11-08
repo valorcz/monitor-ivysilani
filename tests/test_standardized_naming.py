@@ -1,10 +1,12 @@
 import pytest
 
 from tvwatch.core.utils import (
+    compute_plex_naming,
     format_standardized_title,
     parse_episode_title_and_number,
     parse_season_number,
     roman_to_int,
+    sanitize_slug,
 )
 
 
@@ -121,3 +123,36 @@ def test_format_standardized_title_with_idec():
         idec="225384613200001",
     )
     assert res == "S01E01 - Stínka - první část"
+
+
+def test_sanitize_slug():
+    assert sanitize_slug("Sluneční soustava") == "sluneční_soustava"
+    assert sanitize_slug("Kde se vzal Měsíc!?") == "kde_se_vzal_měsíc"
+    assert sanitize_slug("  A / B : C  ") == "a_b_c"
+    assert sanitize_slug("") == ""
+
+
+def test_compute_plex_naming():
+    res = compute_plex_naming(
+        show_title="Sluneční soustava",
+        raw_episode_title="2/5 Sopečné světy",
+        season_val="I. řada",
+    )
+    assert res["clean_show_dir"] == "sluneční_soustava"
+    assert res["clean_season_dir"] == "season_01"
+    assert res["clean_filename"] == "sluneční_soustava_s01e02_sopečné_světy"
+    assert res["season_number"] == 1
+    assert res["episode_number"] == 2
+    assert res["series"] == "Sluneční soustava"
+    assert res["episode"] == "Sopečné světy"
+
+    # Test with show title suffix/prefix removal
+    res2 = compute_plex_naming(
+        show_title="Tobiáš Lolness",
+        raw_episode_title="26. díl - Tráva je křehká - Tobiáš Lolness",
+        season_val="1. řada",
+    )
+    assert res2["clean_show_dir"] == "tobiáš_lolness"
+    assert res2["clean_season_dir"] == "season_01"
+    assert res2["clean_filename"] == "tobiáš_lolness_s01e26_tráva_je_křehká"
+    assert res2["episode_number"] == 26

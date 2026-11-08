@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
   "pydantic>=2",
   "pydantic-settings>=2",
-  "duckdb>=1",
+  "duckdb==1.4.4",
   "lxml>=5",
   "requests>=2",
   "tenacity>=8",
@@ -16,6 +16,7 @@ dependencies = [
   "pytest>=9.0.2",
   "pytz>=2024.1",
   "rich>=13.0.0",
+  "yt-dlp>=2026.8.19",
 ]
 
 [tool.setuptools]
@@ -23,15 +24,14 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["tvwatch*"]
+include = ["tvwatch*", "yt_dlp_plugins*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
 
 [dependency-groups]
 dev = [
-    "ruff>=0.16.8",
-    "yt-dlp>=2026.8.19"
+    "ruff>=0.16.8"
 ]
 
 [tool.uv]

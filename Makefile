@@ -15,12 +15,6 @@ UV_PIP = uv pip
 install:
 	$(UV_PIP) install -e .
 	$(UV_PIP) install pytest
-	@for d in .venv/lib*/python*/site-packages/yt_dlp/extractor; do \
-		if [ -d "$$d" ]; then \
-			cp yt-dlp-patch/ceskatelevize.py "$$d/"; \
-			echo "Patched yt-dlp extractor in $$d"; \
-		fi \
-	done
 
 # --------------------------
 #  Test runners
