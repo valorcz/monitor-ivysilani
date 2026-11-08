@@ -60,3 +60,76 @@ def test_dynamic_graphql_hash_caching():
     clear_graphql_hash_cache()
     fetch_dynamic_graphql_hash(session, "https://ceskatelevize.cz/porady/123-test/")
     assert session.get.call_count == 2
+
+
+def test_extract_programme_id():
+    from tvwatch.core.scraper import extract_programme_id
+
+    # Modern structure (programme in data)
+    next_data_modern = {
+        "props": {
+            "pageProps": {
+                "data": {
+                    "programme": {
+                        "programmeId": "648831feef264d9bd6016a1c",
+                        "title": "Události",
+                    }
+                }
+            }
+        }
+    }
+    assert extract_programme_id(next_data_modern) == "648831feef264d9bd6016a1c"
+
+    # From apolloState
+    next_data_apollo = {
+        "props": {
+            "apolloState": {
+                "Programme:1": {
+                    "__typename": "Programme",
+                    "programmeId": "648831feef264d9bd6016a1c",
+                }
+            }
+        }
+    }
+    assert extract_programme_id(next_data_apollo) == "648831feef264d9bd6016a1c"
+
+    # Empty
+    assert extract_programme_id({}) is None
+
+
+def test_fetch_all_episodes_with_programme_id():
+    from unittest.mock import MagicMock
+    from tvwatch.core.scraper import fetch_all_episodes
+
+    session = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.ok = True
+    mock_resp.json.return_value = {
+        "data": {
+            "programme": {
+                "episodes": {
+                    "totalCount": 2,
+                    "items": [
+                        {
+                            "id": "226411000101108",
+                            "title": "8. listopadu",
+                            "playable": True,
+                        },
+                        {
+                            "id": "226411000101107",
+                            "title": "7. listopadu",
+                            "playable": True,
+                        },
+                    ],
+                }
+            }
+        }
+    }
+    session.post.return_value = mock_resp
+
+    episodes = fetch_all_episodes(session, programme_id="648831feef264d9bd6016a1c")
+    assert len(episodes) == 2
+    assert episodes[0]["id"] == "226411000101108"
+    assert session.post.call_count == 1
+    call_args = session.post.call_args
+    assert "programme(programmeId: \"648831feef264d9bd6016a1c\")" in call_args[1]["json"]["query"]

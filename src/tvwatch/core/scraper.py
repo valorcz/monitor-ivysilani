@@ -82,7 +82,10 @@ def extract_show_idec(next_data: dict[str, Any]) -> str | None:
     Extracts the 15-digit internal show IDEC from __NEXT_DATA__.
     """
     props = next_data.get("props", {})
-    show_obj = props.get("pageProps", {}).get("data", {}).get("show", {})
+    show_obj = (
+        props.get("pageProps", {}).get("data", {}).get("programme", {})
+        or props.get("pageProps", {}).get("data", {}).get("show", {})
+    )
     idec = show_obj.get("idec")
     if idec:
         return str(idec)
@@ -92,10 +95,31 @@ def extract_show_idec(next_data: dict[str, Any]) -> str | None:
     for value in apollo.values():
         if (
             isinstance(value, dict)
-            and value.get("__typename") == "Show"
+            and value.get("__typename") in ("Show", "Programme")
             and value.get("idec")
         ):
             return str(value["idec"])
+
+    return None
+
+
+def extract_programme_id(next_data: dict[str, Any]) -> str | None:
+    """
+    Extracts the internal 24-character hex programmeId from __NEXT_DATA__.
+    """
+    props = next_data.get("props", {})
+    page_data = props.get("pageProps", {}).get("data", {})
+    prog = page_data.get("programme") or page_data.get("show") or {}
+    prog_id = prog.get("programmeId")
+    if prog_id:
+        return str(prog_id)
+
+    # Search in apolloState
+    apollo = props.get("apolloState", {})
+    for value in apollo.values():
+        if isinstance(value, dict) and value.get("__typename") in ("Programme", "Show"):
+            if value.get("programmeId"):
+                return str(value["programmeId"])
 
     return None
 
@@ -169,13 +193,18 @@ def fetch_dynamic_graphql_hash(
 
 
 def fetch_all_episodes(
-    session: requests.Session, show_idec: str, query_hash: str
+    session: requests.Session,
+    show_idec: str | None = None,
+    query_hash: str | None = None,
+    programme_id: str | None = None,
 ) -> list[dict]:
     """
-    Fetches all playable episodes via the GraphQL API using the persisted query hash.
+    Fetches all playable episodes via the GraphQL API.
+    Uses modern programmeId direct GraphQL POST if programme_id is provided,
+    otherwise falls back to legacy GET with persisted query hash.
     Paginates automatically until all playable episodes are returned.
     """
-    base_url = "https://api.ceskatelevize.cz/graphql/"
+    base_url = "https://api.ceskatelevize.cz/graphql/?client=iVysilaniWeb"
     limit = 50
     offset = 0
     all_episodes = []
@@ -186,44 +215,95 @@ def fetch_all_episodes(
     }
 
     while True:
-        variables = {
-            "limit": limit,
-            "offset": offset,
-            "idec": show_idec,
-            "orderBy": "oldest",
-            "onlyPlayable": True,
-        }
-
-        extensions = {"persistedQuery": {"version": 1, "sha256Hash": query_hash}}
-
-        params = {
-            "operationName": "GetEpisodes",
-            "variables": json.dumps(variables),
-            "extensions": json.dumps(extensions),
-        }
-
-        try:
-            response = session.get(
-                base_url, params=params, headers=headers, timeout=CONFIG.HTTP_TIMEOUT
-            )
-            response.raise_for_status()
-            data = response.json()
-            if "errors" in data and any(
-                "PersistedQuery" in str(err) for err in data.get("errors", [])
-            ):
+        if programme_id:
+            query = f"""
+            query {{
+              programme(programmeId: "{programme_id}") {{
+                episodes(limit: {limit}, offset: {offset}, onlyPlayable: true) {{
+                  totalCount
+                  items {{
+                    id
+                    title
+                    playable
+                    duration
+                    description
+                    showTitle
+                    showId
+                    showCode
+                    season {{
+                      title
+                    }}
+                    groups {{
+                      title
+                    }}
+                    date {{
+                      datetime
+                    }}
+                  }}
+                }}
+              }}
+            }}
+            """
+            try:
+                response = session.post(
+                    base_url,
+                    json={"query": query},
+                    headers=headers,
+                    timeout=CONFIG.HTTP_TIMEOUT,
+                )
+                response.raise_for_status()
+                data = response.json()
+            except Exception as e:  # noqa: BLE001
                 logger.warning(
-                    "GraphQL persisted query hash rejected by server. Invalidating cache."
+                    f"GraphQL query failed at offset {offset} for programme {programme_id}: {e}"
+                )
+                break
+        else:
+            variables = {
+                "limit": limit,
+                "offset": offset,
+                "idec": show_idec,
+                "orderBy": "oldest",
+                "onlyPlayable": True,
+            }
+
+            extensions = {"persistedQuery": {"version": 1, "sha256Hash": query_hash}}
+
+            params = {
+                "operationName": "GetEpisodes",
+                "variables": json.dumps(variables),
+                "extensions": json.dumps(extensions),
+            }
+
+            try:
+                response = session.get(
+                    "https://api.ceskatelevize.cz/graphql/",
+                    params=params,
+                    headers=headers,
+                    timeout=CONFIG.HTTP_TIMEOUT,
+                )
+                response.raise_for_status()
+                data = response.json()
+                if "errors" in data and any(
+                    "PersistedQuery" in str(err) for err in data.get("errors", [])
+                ):
+                    logger.warning(
+                        "GraphQL persisted query hash rejected by server. Invalidating cache."
+                    )
+                    clear_graphql_hash_cache()
+                    break
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    f"GraphQL query failed at offset {offset} for show IDEC {show_idec}: {e}"
                 )
                 clear_graphql_hash_cache()
                 break
-        except Exception as e:  # noqa: BLE001
-            logger.warning(
-                f"GraphQL query failed at offset {offset} for show IDEC {show_idec}: {e}"
-            )
-            clear_graphql_hash_cache()
-            break
 
-        episodes_data = data.get("data", {}).get("episodesPreviewFind", {})
+        episodes_data = (
+            data.get("data", {}).get("programme", {}).get("episodes")
+            or data.get("data", {}).get("episodesPreviewFind")
+            or {}
+        )
         items = episodes_data.get("items", [])
         total_count = episodes_data.get("totalCount", 0)
 
@@ -307,22 +387,28 @@ def sync_one_show(
         log.error(f"Failed to fetch show page {redact_url_query(canonical_url)}: {e}")
         return None
 
-    # Parse metadata & show IDEC
+    # Parse metadata & show IDs
     next_data = extract_next_data(html_content)
     show_idec = extract_show_idec(next_data)
+    programme_id = extract_programme_id(next_data)
 
     schema_data = _extract_schema_data(html_content)
     tv_series_meta = schema_data.get("series") or {}
 
     show_title = None
     if next_data:
-        show_obj = (
+        prog_obj = (
             next_data.get("props", {})
             .get("pageProps", {})
             .get("data", {})
-            .get("show", {})
+            .get("programme")
+            or next_data.get("props", {})
+            .get("pageProps", {})
+            .get("data", {})
+            .get("show")
+            or {}
         )
-        show_title = show_obj.get("title")
+        show_title = prog_obj.get("title")
 
     if not show_title:
         show_title = tv_series_meta.get("name")
@@ -338,9 +424,13 @@ def sync_one_show(
 
     # Fetch episodes
     episodes_raw = []
-    if show_idec:
+    if programme_id:
+        episodes_raw = fetch_all_episodes(session, programme_id=programme_id)
+    elif show_idec:
         query_hash = fetch_dynamic_graphql_hash(session, canonical_url)
-        episodes_raw = fetch_all_episodes(session, show_idec, query_hash)
+        episodes_raw = fetch_all_episodes(
+            session, show_idec=show_idec, query_hash=query_hash
+        )
 
     if not episodes_raw:
         log.debug(f"Falling back to SSR/JSON-LD episode extraction for {canonical_url}")
