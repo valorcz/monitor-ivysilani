@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import glob
 import os
+import re
 import sys
 from datetime import UTC, datetime
 
@@ -131,24 +132,50 @@ async def execute_batch_download_with_progress(
                 with contextlib.suppress(discord.HTTPException):
                     await followup_msg.edit(embed=embed)
 
-    results = await download_many(urls, logger, progress_callback=_progress)
+    try:
+        results = await download_many(urls, logger, progress_callback=_progress)
+    except Exception as ex:
+        logger.error(f"Unexpected error during download: {ex}", exc_info=True)
+        results = [(u, False, str(ex)) for u in urls]
+
     elapsed = (datetime.now(tz=UTC) - start_time).total_seconds()
     ok = sum(1 for _, s, _ in results if s)
     failed = len(results) - ok
 
     if button:
-        button.label = f"Staženo ({ok}/{len(results)})"
-        button.style = (
-            discord.ButtonStyle.success
-            if failed == 0
-            else discord.ButtonStyle.secondary
-        )
+        if failed == 0:
+            button.label = "Staženo" if total == 1 else f"Staženo ({ok}/{total})"
+            button.style = discord.ButtonStyle.success
+            button.disabled = True
+        elif ok == 0:
+            button.label = "Stáhnout znovu" if total == 1 else f"Stáhnout znovu ({total})"
+            button.style = discord.ButtonStyle.danger
+            button.disabled = False
+        else:
+            button.label = f"Opakovat neúspěšné ({failed})"
+            button.style = discord.ButtonStyle.danger
+            button.disabled = False
+
+        if hasattr(view, "ep_urls"):
+            view.ep_urls = [u for u, s, _ in results if not s] if failed > 0 else urls
+
         with contextlib.suppress(discord.HTTPException):
             await interaction.edit_original_response(view=view)
 
-    embed.title = "Hromadné stahování dokončeno"
+    embed.title = (
+        "Hromadné stahování dokončeno"
+        if failed == 0
+        else ("Stahování selhalo" if ok == 0 else "Hromadné stahování - dokončeno s chybami")
+    )
     embed.color = 3066993 if failed == 0 else (15158332 if ok == 0 else 15105570)
-    embed.set_field_at(0, name="Stav", value="Dokončeno", inline=True)
+    embed.set_field_at(
+        0,
+        name="Stav",
+        value="Dokončeno v pořádku"
+        if failed == 0
+        else ("Selhalo" if ok == 0 else f"Dokončeno s {failed} chybami"),
+        inline=True,
+    )
     embed.set_field_at(
         1,
         name="Výsledek",
@@ -161,6 +188,24 @@ async def execute_batch_download_with_progress(
         )
     else:
         embed.add_field(name="Celkový čas", value=f"{elapsed:.1f} s", inline=False)
+
+    if failed > 0:
+        err_lines = []
+        for u, _, err in results:
+            if err:
+                lines = [line.strip() for line in err.splitlines() if line.strip()]
+                error_line = next(
+                    (line for line in reversed(lines) if "ERROR" in line),
+                    lines[-1] if lines else "Chyba při stahování",
+                )
+                err_lines.append(f"• `<{u}>`: `{error_line[:120]}`")
+        if err_lines:
+            embed.add_field(
+                name="Chyby",
+                value="\n".join(err_lines[:5]),
+                inline=False,
+            )
+
     with contextlib.suppress(discord.HTTPException):
         await followup_msg.edit(embed=embed)
 
@@ -168,18 +213,44 @@ async def execute_batch_download_with_progress(
 
 
 class DownloadAllView(discord.ui.View):
-    def __init__(self, ep_urls: list):
+    def __init__(self, ep_urls: list[str] | None = None):
         super().__init__(timeout=None)
-        self.ep_urls = ep_urls
-        label = "Stáhnout" if len(ep_urls) == 1 else f"Stáhnout vše ({len(ep_urls)})"
-        btn = discord.ui.Button(label=label, style=discord.ButtonStyle.primary)
+        self.ep_urls = list(ep_urls) if ep_urls else []
+        count = len(self.ep_urls)
+        label = "Stáhnout" if count <= 1 else f"Stáhnout vše ({count})"
+        btn = discord.ui.Button(
+            label=label,
+            style=discord.ButtonStyle.primary,
+            custom_id="tvwatch:download_all_btn",
+        )
         btn.callback = self.download_all
         self.add_item(btn)
 
     async def download_all(self, interaction: discord.Interaction):
+        urls = self.ep_urls
+        # If ep_urls is empty (e.g. persistent view re-instantiated after bot restart),
+        # extract episode URLs dynamically from the message embed description
+        if not urls and interaction.message and interaction.message.embeds:
+            for emb in interaction.message.embeds:
+                if emb.description:
+                    extracted = re.findall(
+                        r"https?://(?:www\.)?ceskatelevize\.cz/porady/[^\s\)]+",
+                        emb.description,
+                    )
+                    if extracted:
+                        urls = extracted
+                        self.ep_urls = extracted
+                        break
+
+        if not urls:
+            await interaction.response.send_message(
+                "Nebyly nalezeny žádné epizody ke stažení.", ephemeral=True
+            )
+            return
+
         btn: discord.ui.Button = self.children[0]  # type: ignore
         await execute_batch_download_with_progress(
-            interaction, view=self, button=btn, urls=self.ep_urls
+            interaction, view=self, button=btn, urls=urls
         )
 
 
@@ -220,6 +291,7 @@ class TVScraperBot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
+        self.add_view(DownloadAllView())
         await self.tree.sync()
         self.sync_loop.start()
 
@@ -623,7 +695,8 @@ class EpisodesView(discord.ui.View):
         dl_buttons = [
             item
             for item in self.children
-            if isinstance(item, discord.ui.Button) and "Stáhnout" in (item.label or "")
+            if isinstance(item, discord.ui.Button)
+            and any(k in (item.label or "") for k in ("Stáhnout", "Opakovat", "Staženo"))
         ]
         btn = dl_buttons[0] if dl_buttons else None
         await execute_batch_download_with_progress(

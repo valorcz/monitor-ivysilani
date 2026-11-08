@@ -155,3 +155,56 @@ def test_shows_list_view_pagination():
         assert embed_page2.footer.text == "Stránka 2 z 3"
 
     asyncio.run(_runner())
+
+
+def test_download_all_view_persistent_and_retry():
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock
+    import discord
+    from tvwatch.interfaces.discord_bot import DownloadAllView, execute_batch_download_with_progress
+
+    # 1. Check persistence properties
+    view = DownloadAllView(["https://www.ceskatelevize.cz/porady/123/1/"])
+    assert view.timeout is None
+    btn = view.children[0]
+    assert btn.custom_id == "tvwatch:download_all_btn"
+    assert btn.label == "Stáhnout"
+
+    # 2. Check dynamic URL recovery from interaction message embed
+    reconstructed_view = DownloadAllView()
+    assert reconstructed_view.ep_urls == []
+    mock_interaction = MagicMock()
+    mock_embed = MagicMock()
+    mock_embed.description = (
+        "• [Díl 1](https://www.ceskatelevize.cz/porady/123/1/)\n"
+        "• [Díl 2](https://www.ceskatelevize.cz/porady/123/2/)"
+    )
+    mock_msg = MagicMock()
+    mock_msg.embeds = [mock_embed]
+    mock_interaction.message = mock_msg
+
+    # 3. Test failed download sets button to active red retry
+    async def _runner():
+        mock_interaction.response = MagicMock()
+        mock_interaction.response.edit_message = AsyncMock()
+        mock_interaction.followup = MagicMock()
+        mock_interaction.followup.send = AsyncMock()
+        mock_interaction.edit_original_response = AsyncMock()
+
+        from unittest.mock import patch
+
+        # Mock download_many to simulate 1 failure
+        with patch("tvwatch.interfaces.discord_bot.download_many", new_callable=AsyncMock) as mock_dl:
+            mock_dl.return_value = [("https://www.ceskatelevize.cz/porady/123/1/", False, "Schema error")]
+            await execute_batch_download_with_progress(
+                mock_interaction,
+                view=view,
+                button=btn,
+                urls=["https://www.ceskatelevize.cz/porady/123/1/"],
+            )
+            assert btn.disabled is False
+            assert btn.style == discord.ButtonStyle.danger
+            assert "Stáhnout znovu" in btn.label
+            assert view.ep_urls == ["https://www.ceskatelevize.cz/porady/123/1/"]
+
+    asyncio.run(_runner())
