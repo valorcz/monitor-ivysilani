@@ -436,6 +436,18 @@ def sync_one_show(
         log.debug(f"Falling back to SSR/JSON-LD episode extraction for {canonical_url}")
         episodes_raw = fallback_extract_episodes(next_data, html_content, canonical_url)
 
+    anomalies: list[str] = []
+    if next_data and not programme_id and not show_idec:
+        msg = f"Změna struktury HTML: z __NEXT_DATA__ pro {canonical_url} se nepodařilo získat programmeId ani IDEC."
+        log.warning(msg)
+        anomalies.append(msg)
+
+    expected_playable = prog_obj.get("playableEpisodeCount") if next_data else None
+    if expected_playable and expected_playable > 0 and len(episodes_raw) == 0:
+        msg = f"Rozpor ve struktuře ČT: Stránka uvádí {expected_playable} přehratelných dílů, ale scraper nalezl 0 pro {canonical_url}."
+        log.warning(msg)
+        anomalies.append(msg)
+
     # Upsert episodes and identify new ones for notification
     new_episodes: list[Episode] = []
     active_playable_ids = set()
@@ -502,7 +514,10 @@ def sync_one_show(
         log.debug(f"No new episodes for {redact_url_query(canonical_url)}")
 
     return SyncResult(
-        source_url=canonical_url, tv_series=series, new_episodes=new_episodes
+        source_url=canonical_url,
+        tv_series=series,
+        new_episodes=new_episodes,
+        anomalies=anomalies,
     )
 
 
@@ -520,7 +535,7 @@ def sync_all(repo: DuckRepo, logger=None, backfill: bool = False) -> list[SyncRe
 
     for url in active_urls:
         res = sync_one_show(url, repo, logger=log, backfill=backfill)
-        if res and res.new_episodes:
+        if res and (res.new_episodes or res.anomalies):
             results.append(res)
 
     return results
@@ -568,7 +583,7 @@ async def sync_all_concurrent(
         if isinstance(item, Exception):
             log.error(f"Error during sync: {item}", exc_info=item)
             continue
-        if item and item.new_episodes:
+        if item and (item.new_episodes or item.anomalies):
             results.append(item)
 
     return results

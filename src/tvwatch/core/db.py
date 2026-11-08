@@ -371,6 +371,39 @@ class DuckRepo:
             ).fetchone()
             return row[0] if row else None
 
+    def should_send_health_alert(self, cooldown_hours: int = 24) -> bool:
+        """
+        Returns True if an upstream schema health alert should be dispatched.
+        Suppresses duplicate alerts if one was already sent within cooldown_hours.
+        """
+        last_str = self.get_guild_value("last_upstream_alert_at")
+        if not last_str:
+            return True
+        try:
+            last_dt = datetime.fromisoformat(last_str)
+            if datetime.now(UTC) - last_dt >= timedelta(hours=cooldown_hours):
+                return True
+        except (ValueError, TypeError):
+            return True
+        return False
+
+    def record_health_alert(self) -> None:
+        """Records that an upstream schema alert was dispatched."""
+        self.set_guild_value("last_upstream_alert_at", datetime.now(UTC).isoformat())
+        self.set_guild_value("last_upstream_status", "failing")
+
+    def record_health_recovery(self) -> bool:
+        """
+        Records that upstream health is restored.
+        Returns True if it was previously in a 'failing' state (meaning a recovery notice should be dispatched).
+        """
+        prev_status = self.get_guild_value("last_upstream_status")
+        self.set_guild_value("last_upstream_status", "ok")
+        if prev_status == "failing":
+            self.set_guild_value("last_upstream_alert_at", "")
+            return True
+        return False
+
     def get_show_episodes(self, show_url: str) -> list[dict]:
         """
         Returns all tracked episodes for a specific show.

@@ -13,6 +13,7 @@ from discord.ext import commands, tasks
 from tvwatch.core.config import CONFIG
 from tvwatch.core.db import DuckRepo
 from tvwatch.core.downloader import download_many, download_one
+from tvwatch.core.health import probe_upstream_health
 from tvwatch.core.logging import setup_logger
 from tvwatch.core.net import assert_allowed_url
 from tvwatch.core.scraper import sync_all_concurrent, sync_one_show
@@ -285,6 +286,39 @@ async def dispatch_notifications(new_data: list, target, repo: DuckRepo | None =
         repo.mark_episodes_notified(all_notified_urls)
 
 
+async def dispatch_health_alert(target, details: list[str], repo: DuckRepo):
+    if not repo.should_send_health_alert(cooldown_hours=24):
+        logger.info("Upstream health alert suppressed by 24h cooldown.")
+        return
+    embed = discord.Embed(
+        title="⚠️ Upozornění: Změna struktury ČT / Chyba scraperu",
+        description=(
+            "Byla detekována chyba při komunikaci s Českou televizí (iVysílání). "
+            "Pravděpodobně došlo ke změně struktury webu nebo GraphQL API.\n\n"
+            "**Detaily zjištěných problémů:**\n"
+            + "\n".join(f"• {d}" for d in details[:5])
+        ),
+        color=15158332,  # Red
+    )
+    embed.add_field(
+        name="Doporučený postup",
+        value="Zkontrolujte aktualizace projektu na GitHubu nebo spusťte příkaz `/health` pro diagnostiku.",
+        inline=False,
+    )
+    await target.send(embed=embed)
+    repo.record_health_alert()
+
+
+async def dispatch_health_recovery(target, repo: DuckRepo):
+    if repo.record_health_recovery():
+        embed = discord.Embed(
+            title="✅ Spojení a struktura ČT iVysílání opět v pořádku",
+            description="Test funkčnosti iVysílání (HTML parser i GraphQL API) proběhl úspěšně. Automatické sledování pokračuje.",
+            color=3066993,  # Green
+        )
+        await target.send(embed=embed)
+
+
 class TVScraperBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
@@ -317,9 +351,32 @@ class TVScraperBot(commands.Bot):
                         f"Guild {guild_id}: cannot access channel {channel_id_str}"
                     )
                     continue
+
+                # Run canary health probe against upstream
+                health = await asyncio.to_thread(probe_upstream_health)
+                if not health.ok:
+                    logger.warning(
+                        f"Upstream canary health check failed: {health.details}"
+                    )
+                    await dispatch_health_alert(channel, health.details, repo)
+                else:
+                    await dispatch_health_recovery(channel, repo)
+
                 new = await sync_all_concurrent(repo, logger, max_concurrency=4)
-                if new:
-                    payload = [r.to_payload() for r in new]
+
+                # Check for runtime anomalies from synced shows
+                runtime_anomalies = [
+                    a for r in new for a in getattr(r, "anomalies", [])
+                ]
+                if runtime_anomalies:
+                    logger.warning(
+                        f"Runtime extraction anomalies detected: {runtime_anomalies}"
+                    )
+                    await dispatch_health_alert(channel, runtime_anomalies, repo)
+
+                new_with_episodes = [r for r in new if r.new_episodes]
+                if new_with_episodes:
+                    payload = [r.to_payload() for r in new_with_episodes]
                     await dispatch_notifications(payload, target=channel, repo=repo)
 
     @sync_loop.before_loop
@@ -897,6 +954,53 @@ async def status_cmd(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 
+@bot.tree.command(
+    name="health",
+    description="Ověří funkčnost napojení na Českou televizi a stav API",
+)
+@app_commands.guild_only()
+async def health_cmd(interaction: discord.Interaction):
+    await interaction.response.defer(thinking=True)
+    health = await asyncio.to_thread(probe_upstream_health)
+    embed = discord.Embed(
+        title="Stav napojení na Českou televizi",
+        color=3066993 if health.ok else 15158332,
+    )
+    html_icon = "🟢" if health.html_ok else "🔴"
+    gql_icon = "🟢" if health.graphql_ok else "🔴"
+
+    embed.add_field(
+        name=f"{html_icon} Web & Next.js Parser",
+        value="V pořádku" if health.html_ok else "Chyba struktury stránky",
+        inline=True,
+    )
+    embed.add_field(
+        name=f"{gql_icon} GraphQL API",
+        value=f"V pořádku ({health.episodes_found} epizod ověřeno)"
+        if health.graphql_ok
+        else "Chyba API",
+        inline=True,
+    )
+    embed.add_field(
+        name="⏱️ Odezva",
+        value=f"{health.latency_ms:.0f} ms",
+        inline=True,
+    )
+    if health.programme_id:
+        embed.add_field(
+            name="ID referenčního pořadu",
+            value=f"`{health.programme_id}`",
+            inline=False,
+        )
+    if health.details:
+        embed.add_field(
+            name="Hlášení a detaily",
+            value="\n".join(f"• {d}" for d in health.details[:5]),
+            inline=False,
+        )
+    await interaction.followup.send(embed=embed)
+
+
 @bot.tree.command(name="sync", description="Okamžitě zkontroluje nové epizody")
 @app_commands.guild_only()
 @app_commands.default_permissions(manage_guild=True)
@@ -906,10 +1010,21 @@ async def sync_cmd(interaction: discord.Interaction):
     db_path = guild_db_path(interaction.guild_id)
     with DuckRepo(db_path) as repo:
         new = await sync_all_concurrent(repo, logger, max_concurrency=4)
-        if not new:
-            await interaction.followup.send("Kontrola dokončena. Žádné nové epizody.")
+
+        # Check for runtime anomalies
+        runtime_anomalies = [
+            a for r in new for a in getattr(r, "anomalies", [])
+        ]
+        if runtime_anomalies:
+            await dispatch_health_alert(interaction.followup, runtime_anomalies, repo)
+
+        new_with_episodes = [r for r in new if r.new_episodes]
+        if not new_with_episodes:
+            if not runtime_anomalies:
+                await interaction.followup.send("Kontrola dokončena. Žádné nové epizody.")
             return
-        payload = [r.to_payload() for r in new]
+
+        payload = [r.to_payload() for r in new_with_episodes]
         await dispatch_notifications(payload, target=interaction.followup, repo=repo)
 
 

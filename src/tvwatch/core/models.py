@@ -52,6 +52,7 @@ class SyncResult(BaseModel):
     source_url: HttpUrl
     tv_series: TVSeries
     new_episodes: list[Episode]
+    anomalies: list[str] = Field(default_factory=list)
 
     @field_validator("source_url", mode="before")
     @classmethod
@@ -67,4 +68,5 @@ class SyncResult(BaseModel):
             "tv_series": self.tv_series.metadata
             or {"name": self.tv_series.name or str(self.source_url)},
             "new_episodes": [e.model_dump_public() for e in self.new_episodes],
+            "anomalies": self.anomalies,
         }
