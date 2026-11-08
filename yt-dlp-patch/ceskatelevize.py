@@ -34,7 +34,8 @@ class CeskaTelevizeIE(InfoExtractor):
             raise ExtractorError('Only "porady" supported.')
 
         next_data = self._search_nextjs_data(webpage, playlist_id)
-        idec = traverse_obj(next_data, ('props', 'pageProps', 'data', ('show', 'mediaMeta'), 'idec'), get_all=False)
+        idec = traverse_obj(next_data, ('props', 'pageProps', 'data', ('show', 'mediaMeta', 'programme', 'episode'), 'idec'), get_all=False)
+        # idec = traverse_obj(next_data, ('props', 'pageProps', 'data', ('show', 'mediaMeta'), 'idec'), get_all=False)
         _type = "idec"
 
         if "/cast/" in traverse_obj(next_data, ('page')):
